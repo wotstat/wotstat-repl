@@ -11,21 +11,15 @@ use tauri::State;
 
 use crate::install::{self, GameInfo};
 use crate::jedi::JediWorker;
+use crate::mcp::{self, ConnectionInfo, McpCliStatus};
 use crate::protocol::{InFrame, OutFrame, ServerEvent};
-use crate::session::AppState;
-use crate::transport::{EventSink, FileBufferTransport};
+use crate::session::{AppState, ClientStatus, CloseResult};
+use crate::transport::EventSink;
 
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
 fn new_id() -> String {
     uuid::Uuid::new_v4().to_string()
-}
-
-async fn await_frame(rx: Receiver<OutFrame>) -> Result<OutFrame, String> {
-    tauri::async_runtime::spawn_blocking(move || rx.recv_timeout(REQUEST_TIMEOUT))
-        .await
-        .map_err(|e| e.to_string())?
-        .map_err(|_| "agent did not respond in time".to_string())
 }
 
 async fn await_value(rx: Receiver<Value>, timeout: Duration) -> Result<Value, String> {
@@ -35,32 +29,20 @@ async fn await_value(rx: Receiver<Value>, timeout: Duration) -> Result<Value, St
         .map_err(|_| "jedi worker did not respond in time".to_string())
 }
 
-fn transport(state: &State<'_, AppState>) -> Result<Arc<FileBufferTransport>, String> {
-    state
-        .inner
-        .lock()
-        .map_err(|_| "state lock poisoned".to_string())?
-        .transport
-        .clone()
-        .ok_or_else(|| "not connected".to_string())
-}
-
 fn jedi(state: &State<'_, AppState>) -> Result<Arc<JediWorker>, String> {
     state
-        .inner
+        .jedi
         .lock()
         .map_err(|_| "state lock poisoned".to_string())?
-        .jedi
         .clone()
         .ok_or_else(|| "jedi worker not started".to_string())
 }
 
-async fn request_outframe(
-    state: &State<'_, AppState>,
-    frame: InFrame,
-) -> Result<OutFrame, String> {
-    let rx = transport(state)?.request(frame);
-    await_frame(rx).await
+async fn request_outframe(state: &State<'_, AppState>, frame: InFrame) -> Result<OutFrame, String> {
+    state
+        .client
+        .request_with_timeout(frame, REQUEST_TIMEOUT)
+        .await
 }
 
 async fn jedi_request(
@@ -78,6 +60,60 @@ pub fn ping() -> &'static str {
 }
 
 #[tauri::command]
+pub fn mcp_connection_info(state: State<'_, AppState>) -> Result<ConnectionInfo, String> {
+    state.mcp.connection_info()
+}
+
+#[tauri::command]
+pub async fn mcp_set_enabled(
+    state: State<'_, AppState>,
+    enabled: bool,
+) -> Result<ConnectionInfo, String> {
+    let mcp = state.mcp.clone();
+    let client = state.client.clone();
+    mcp.set_enabled(enabled, client).await
+}
+
+#[tauri::command]
+pub async fn mcp_cli_status() -> Result<McpCliStatus, String> {
+    tauri::async_runtime::spawn_blocking(mcp::cli_status)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn mcp_add_to_codex(state: State<'_, AppState>) -> Result<String, String> {
+    let mcp = state.mcp.clone();
+    tauri::async_runtime::spawn_blocking(move || mcp.add_to_codex())
+        .await
+        .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+pub async fn mcp_add_to_claude(state: State<'_, AppState>) -> Result<String, String> {
+    let mcp = state.mcp.clone();
+    tauri::async_runtime::spawn_blocking(move || mcp.add_to_claude())
+        .await
+        .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+pub async fn mcp_remove_from_codex(state: State<'_, AppState>) -> Result<String, String> {
+    let mcp = state.mcp.clone();
+    tauri::async_runtime::spawn_blocking(move || mcp.remove_from_codex())
+        .await
+        .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+pub async fn mcp_remove_from_claude(state: State<'_, AppState>) -> Result<String, String> {
+    let mcp = state.mcp.clone();
+    tauri::async_runtime::spawn_blocking(move || mcp.remove_from_claude())
+        .await
+        .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
 pub fn default_buffer_dir() -> String {
     install::default_buffer_dir_path()
         .to_string_lossy()
@@ -91,9 +127,7 @@ pub fn stubs_dir() -> String {
 
 /// Persist runtime-generated `.pyi` stubs to the canonical jedi sys_path root.
 #[tauri::command]
-pub fn write_stubs(
-    stubs: std::collections::HashMap<String, String>,
-) -> Result<String, String> {
+pub fn write_stubs(stubs: std::collections::HashMap<String, String>) -> Result<String, String> {
     install::write_stubs(&stubs)
 }
 
@@ -116,8 +150,54 @@ pub fn install_agent(game_dir: String, mods_version: String) -> Result<String, S
 }
 
 #[tauri::command]
-pub fn launch_game(game_dir: String, exe: String) -> Result<(), String> {
-    install::launch_game(&game_dir, &exe)
+pub fn launch_game(
+    state: State<'_, AppState>,
+    game_dir: String,
+    exe: String,
+    replay: Option<String>,
+) -> Result<(), String> {
+    state
+        .client
+        .launch(&game_dir, &exe, replay.as_deref())
+        .map(|_| ())
+}
+
+#[tauri::command]
+pub fn list_clients(state: State<'_, AppState>) -> Result<Vec<ClientStatus>, String> {
+    state.client.list()
+}
+
+#[tauri::command]
+pub fn start_client(
+    state: State<'_, AppState>,
+    game_dir: String,
+    replay: Option<String>,
+    on_event: Channel<ServerEvent>,
+) -> Result<ClientStatus, String> {
+    let sink: EventSink = Arc::new(move |event| {
+        let _ = on_event.send(event);
+    });
+    state.client.start(&game_dir, replay.as_deref(), sink)
+}
+
+#[tauri::command]
+pub async fn close_client(
+    state: State<'_, AppState>,
+    timeout_ms: Option<u64>,
+) -> Result<CloseResult, String> {
+    let client = state.client.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        client.close(Duration::from_millis(
+            timeout_ms.unwrap_or(10_000).min(60_000),
+        ))
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+pub fn kill_client(state: State<'_, AppState>) -> Result<ClientStatus, String> {
+    state.client.kill()
 }
 
 // --- Session ------------------------------------------------------------------
@@ -129,35 +209,15 @@ pub fn connect(
     on_event: Channel<ServerEvent>,
 ) -> Result<(), String> {
     let dir = PathBuf::from(&buffer_dir);
-    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let sink: EventSink = Arc::new(move |event| {
         let _ = on_event.send(event);
     });
-    let transport = FileBufferTransport::start(dir.clone(), sink);
-    let mut inner = state
-        .inner
-        .lock()
-        .map_err(|_| "state lock poisoned".to_string())?;
-    // Stop any prior transport so a reconnect doesn't leak its reader thread.
-    if let Some(old) = inner.transport.take() {
-        old.stop();
-    }
-    inner.transport = Some(transport);
-    inner.buffer_dir = Some(dir);
-    Ok(())
+    state.client.connect(dir, sink)
 }
 
 #[tauri::command]
 pub fn disconnect(state: State<'_, AppState>) -> Result<(), String> {
-    let mut inner = state
-        .inner
-        .lock()
-        .map_err(|_| "state lock poisoned".to_string())?;
-    if let Some(transport) = inner.transport.take() {
-        transport.stop();
-    }
-    inner.buffer_dir = None;
-    Ok(())
+    state.client.disconnect()
 }
 
 #[tauri::command]
@@ -166,8 +226,20 @@ pub async fn exec_code(state: State<'_, AppState>, code: String) -> Result<OutFr
 }
 
 #[tauri::command]
-pub async fn complete(state: State<'_, AppState>, prefix: String) -> Result<OutFrame, String> {
-    request_outframe(&state, InFrame::Complete { id: new_id(), prefix }).await
+pub async fn complete(
+    state: State<'_, AppState>,
+    prefix: String,
+    budget: u32,
+) -> Result<OutFrame, String> {
+    request_outframe(
+        &state,
+        InFrame::Complete {
+            id: new_id(),
+            prefix,
+            budget,
+        },
+    )
+    .await
 }
 
 #[tauri::command]
@@ -188,12 +260,15 @@ pub async fn dump_object(
     expr: String,
     depth: u32,
 ) -> Result<OutFrame, String> {
-    let rx = transport(&state)?.request(InFrame::Dump {
-        id: new_id(),
-        expr,
-        depth,
-    });
-    let frame = await_frame(rx).await?;
+    let frame = request_outframe(
+        &state,
+        InFrame::Dump {
+            id: new_id(),
+            expr,
+            depth,
+        },
+    )
+    .await?;
     if let OutFrame::Dump { stubs, .. } = &frame {
         if !stubs.is_empty() {
             let _ = install::write_stubs(stubs);
@@ -220,10 +295,10 @@ pub async fn jedi_start(
     )
     .await?;
     state
-        .inner
+        .jedi
         .lock()
         .map_err(|_| "state lock poisoned".to_string())?
-        .jedi = Some(Arc::clone(&worker));
+        .replace(Arc::clone(&worker));
     Ok(result)
 }
 
@@ -246,5 +321,10 @@ pub async fn jedi_complete(
 #[tauri::command]
 pub async fn jedi_lint(state: State<'_, AppState>, code: String) -> Result<Value, String> {
     let worker = jedi(&state)?;
-    jedi_request(&worker, json!({ "op": "lint", "code": code }), REQUEST_TIMEOUT).await
+    jedi_request(
+        &worker,
+        json!({ "op": "lint", "code": code }),
+        REQUEST_TIMEOUT,
+    )
+    .await
 }

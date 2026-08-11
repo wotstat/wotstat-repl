@@ -20,7 +20,7 @@ src-tauri/gen/schemas
 .omc/
 __pycache__/
 *.pyc
-agent/dist/
+src-tauri/resources/*.mod
 
 # dev screenshots
 shot*.png

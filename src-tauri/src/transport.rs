@@ -17,6 +17,7 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime};
 
+use crate::process::is_process_alive;
 use crate::protocol::{InFrame, LogLine, OutFrame, ServerEvent};
 
 const LOCK_STALE: Duration = Duration::from_secs(5);
@@ -39,6 +40,8 @@ impl FileBufferTransport {
             running: Arc::new(AtomicBool::new(true)),
             sink,
         });
+        transport.reset_desktop_buffer();
+        transport.send(InFrame::Hello);
         let worker = Arc::clone(&transport);
         thread::spawn(move || worker.read_loop());
         transport
@@ -51,14 +54,30 @@ impl FileBufferTransport {
     /// Send a request and get a receiver that resolves with the matching reply.
     pub fn request(&self, frame: InFrame) -> Receiver<OutFrame> {
         let (tx, rx) = mpsc::channel();
-        self.pending
-            .lock()
-            .unwrap()
-            .insert(frame.id().to_string(), tx);
+        let id = frame.id().expect("control frames cannot be requested");
+        self.pending.lock().unwrap().insert(id.to_string(), tx);
+        self.send(frame);
+        rx
+    }
+
+    fn send(&self, frame: InFrame) {
         if let Ok(line) = serde_json::to_string(&frame) {
             self.append("d2c", &line);
         }
-        rx
+    }
+
+    /// Drop requests left by a previous desktop session. Keep `c2d`: a live
+    /// agent may have already written its hello and startup logs there.
+    fn reset_desktop_buffer(&self) {
+        let path = self.dir.join("d2c");
+        if !path.exists() {
+            return;
+        }
+        let lock = self.dir.join("d2c.lock");
+        if acquire(&lock) {
+            let _ = fs::write(path, b"");
+            release(&lock);
+        }
     }
 
     fn append(&self, name: &str, line: &str) {
@@ -77,10 +96,18 @@ impl FileBufferTransport {
     fn read_loop(&self) {
         let path = self.dir.join("c2d");
         let lock = self.dir.join("c2d.lock");
+        let mut handshake_seen = false;
+        let mut game_pid = None;
         while self.running.load(Ordering::Relaxed) {
             let mut batch = Vec::new();
+            let mut disconnected = false;
             for line in drain_file(&path, &lock) {
                 match serde_json::from_str::<OutFrame>(&line) {
+                    Ok(OutFrame::Disconnected) => {
+                        if handshake_seen {
+                            disconnected = true;
+                        }
+                    }
                     Ok(OutFrame::Stdout {
                         stream,
                         level,
@@ -91,6 +118,8 @@ impl FileBufferTransport {
                         text,
                     }),
                     Ok(OutFrame::Hello { version, pid }) => {
+                        handshake_seen = true;
+                        game_pid = pid;
                         (self.sink)(ServerEvent::Hello { version, pid });
                     }
                     Ok(frame) => {
@@ -106,6 +135,16 @@ impl FileBufferTransport {
             }
             if !batch.is_empty() {
                 (self.sink)(ServerEvent::Log { lines: batch });
+            }
+            if disconnected {
+                (self.sink)(ServerEvent::Disconnected);
+                self.running.store(false, Ordering::Relaxed);
+                break;
+            }
+            if game_pid.map(|pid| !is_process_alive(pid)).unwrap_or(false) {
+                (self.sink)(ServerEvent::Disconnected);
+                self.running.store(false, Ordering::Relaxed);
+                break;
             }
             thread::sleep(POLL_INTERVAL);
         }
@@ -184,7 +223,10 @@ mod tests {
                 return;
             }
         };
-        let runner = concat!(env!("CARGO_MANIFEST_DIR"), "/../agent/run_standalone.py");
+        let runner = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../mod/tests/run_standalone.py"
+        );
         let dir = std::env::temp_dir().join(format!("wms_rust_it_{}", std::process::id()));
         let _ = fs::create_dir_all(&dir);
 
@@ -204,7 +246,7 @@ mod tests {
 
         let rx = transport.request(InFrame::Exec {
             id: "t1".into(),
-            code: "21 * 2".into(),
+            code: "(__import__('sys').stdout.write('out'), __import__('sys').stderr.write('err'), 21 * 2)[-1]".into(),
         });
         let frame = rx.recv_timeout(Duration::from_secs(10));
 
@@ -220,11 +262,163 @@ mod tests {
 
         assert!(got_hello, "agent should send a hello handshake on start");
         match frame {
-            Ok(OutFrame::Result { repr, ok, .. }) => {
+            Ok(OutFrame::Result {
+                repr,
+                ok,
+                stdout,
+                stderr,
+                ..
+            }) => {
                 assert!(ok, "exec should succeed");
                 assert_eq!(repr.as_deref(), Some("42"));
+                assert_eq!(stdout, "out");
+                assert_eq!(stderr, "err");
             }
             other => panic!("unexpected reply: {other:?}"),
         }
+    }
+
+    #[cfg(any(unix, windows))]
+    #[test]
+    fn attaches_to_agent_that_sent_hello_before_transport_started() {
+        let dir =
+            std::env::temp_dir().join(format!("wms_rust_preconnected_{}", std::process::id()));
+        let _ = fs::create_dir_all(&dir);
+        fs::write(
+            dir.join("c2d"),
+            format!(
+                "{{\"type\":\"hello\",\"version\":\"test\",\"pid\":{}}}\n",
+                std::process::id()
+            ),
+        )
+        .unwrap();
+
+        let events: Arc<Mutex<Vec<ServerEvent>>> = Arc::new(Mutex::new(Vec::new()));
+        let collected = Arc::clone(&events);
+        let transport = FileBufferTransport::start(
+            dir.clone(),
+            Arc::new(move |event| collected.lock().unwrap().push(event)),
+        );
+
+        let deadline = Instant::now() + Duration::from_secs(1);
+        while Instant::now() < deadline
+            && !events
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|event| matches!(event, ServerEvent::Hello { .. }))
+        {
+            thread::sleep(Duration::from_millis(10));
+        }
+
+        let desktop_handshake = fs::read_to_string(dir.join("d2c")).unwrap();
+        transport.stop();
+        let _ = fs::remove_dir_all(&dir);
+
+        assert!(desktop_handshake.contains("{\"type\":\"hello\"}"));
+        assert!(events.lock().unwrap().iter().any(|event| matches!(
+            event,
+            ServerEvent::Hello {
+                version: Some(version),
+                pid: Some(pid),
+            } if version == "test" && *pid == std::process::id() as i64
+        )));
+    }
+
+    #[test]
+    fn explicit_disconnect_emits_event() {
+        let dir = std::env::temp_dir().join(format!("wms_rust_disconnect_{}", std::process::id()));
+        let _ = fs::create_dir_all(&dir);
+
+        let events: Arc<Mutex<Vec<ServerEvent>>> = Arc::new(Mutex::new(Vec::new()));
+        let collected = Arc::clone(&events);
+        let transport = FileBufferTransport::start(
+            dir.clone(),
+            Arc::new(move |ev| collected.lock().unwrap().push(ev)),
+        );
+        transport.append("c2d", "{\"type\":\"hello\"}\n{\"type\":\"disconnected\"}");
+
+        let deadline = Instant::now() + Duration::from_secs(1);
+        while Instant::now() < deadline
+            && !events
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|event| matches!(event, ServerEvent::Disconnected))
+        {
+            thread::sleep(Duration::from_millis(10));
+        }
+
+        transport.stop();
+        let _ = fs::remove_dir_all(&dir);
+
+        assert!(events
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|event| matches!(event, ServerEvent::Disconnected)));
+    }
+
+    #[test]
+    fn start_ignores_disconnect_without_handshake() {
+        let dir =
+            std::env::temp_dir().join(format!("wms_rust_stale_session_{}", std::process::id()));
+        let _ = fs::create_dir_all(&dir);
+        fs::write(dir.join("c2d"), b"{\"type\":\"disconnected\"}\n").unwrap();
+
+        let events: Arc<Mutex<Vec<ServerEvent>>> = Arc::new(Mutex::new(Vec::new()));
+        let collected = Arc::clone(&events);
+        let transport = FileBufferTransport::start(
+            dir.clone(),
+            Arc::new(move |ev| collected.lock().unwrap().push(ev)),
+        );
+
+        thread::sleep(Duration::from_millis(100));
+        transport.stop();
+        let _ = fs::remove_dir_all(&dir);
+
+        assert!(!events
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|event| matches!(event, ServerEvent::Disconnected)));
+    }
+
+    #[cfg(any(unix, windows))]
+    #[test]
+    fn dead_agent_pid_emits_disconnected() {
+        let dir = std::env::temp_dir().join(format!("wms_rust_dead_pid_{}", std::process::id()));
+        let _ = fs::create_dir_all(&dir);
+
+        let events: Arc<Mutex<Vec<ServerEvent>>> = Arc::new(Mutex::new(Vec::new()));
+        let collected = Arc::clone(&events);
+        let transport = FileBufferTransport::start(
+            dir.clone(),
+            Arc::new(move |ev| collected.lock().unwrap().push(ev)),
+        );
+        transport.append(
+            "c2d",
+            &format!("{{\"type\":\"hello\",\"pid\":{}}}", i64::MAX),
+        );
+
+        let deadline = Instant::now() + Duration::from_secs(1);
+        while Instant::now() < deadline
+            && !events
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|event| matches!(event, ServerEvent::Disconnected))
+        {
+            thread::sleep(Duration::from_millis(10));
+        }
+
+        transport.stop();
+        let _ = fs::remove_dir_all(&dir);
+
+        assert!(events
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|event| matches!(event, ServerEvent::Disconnected)));
     }
 }

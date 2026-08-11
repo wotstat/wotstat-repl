@@ -9,6 +9,7 @@ import time
 import threading
 import collections
 
+from . import __version__
 from .framebus import FrameBus
 from .capture import Capture
 from .runner import run_on_main
@@ -36,11 +37,16 @@ class _Agent(object):
         thread.setDaemon(True)
         thread.start()
         # Handshake so the desktop knows the in-game agent is actually alive.
-        self._bus.send({'type': 'hello', 'version': '0.1.0', 'pid': os.getpid()})
+        self._bus.send({'type': 'hello', 'version': __version__, 'pid': os.getpid()})
 
     def stop(self):
+        if not self._running:
+            return
         self._running = False
-        self._capture.uninstall()
+        try:
+            self._capture.uninstall()
+        finally:
+            self._bus.send({'type': 'disconnected'})
 
     def _flush_output(self):
         pending = len(self._queue)

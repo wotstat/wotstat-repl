@@ -35,9 +35,15 @@ async function copyText(text: string): Promise<void> {
   }
 }
 
-export function LogConsole() {
+interface LogConsoleProps {
+  verticalLayout: boolean
+  onToggleLayout: () => void
+}
+
+export function LogConsole({ verticalLayout, onToggleLayout }: LogConsoleProps) {
   const host = useRef<HTMLDivElement | null>(null)
   const termRef = useRef<Terminal | null>(null)
+  const filterMenu = useRef<HTMLDetailsElement | null>(null)
 
   const [hidden, setHidden] = useState<ReadonlySet<Severity>>(new Set())
   const [search, setSearch] = useState('')
@@ -58,6 +64,14 @@ export function LogConsole() {
     const t = setTimeout(() => setAppliedSearch(search), 150)
     return () => clearTimeout(t)
   }, [search])
+
+  useEffect(() => {
+    const closeFilterMenu = (event: PointerEvent) => {
+      if (!filterMenu.current?.contains(event.target as Node)) filterMenu.current?.removeAttribute('open')
+    }
+    document.addEventListener('pointerdown', closeFilterMenu)
+    return () => document.removeEventListener('pointerdown', closeFilterMenu)
+  }, [])
 
   useEffect(() => {
     const node = host.current
@@ -145,19 +159,52 @@ export function LogConsole() {
   return (
     <Panel
       title="Console"
-      className="w-[42%]"
+      className="w-full"
       actions={
         <div className="flex items-center gap-1.5">
-          {SEVERITIES.map((sev) => (
-            <HeaderButton
-              key={sev}
-              onClick={() => toggle(sev)}
-              title={hidden.has(sev) ? `Show ${sev}` : `Hide ${sev}`}
-              className={hidden.has(sev) ? 'opacity-40' : 'border-live text-fg'}
+          <HeaderButton
+            onClick={onToggleLayout}
+            title={verticalLayout ? 'Switch to horizontal layout' : 'Switch to vertical layout'}
+            aria-label={verticalLayout ? 'Switch to horizontal layout' : 'Switch to vertical layout'}
+            className="inline-flex w-7 items-center justify-center p-0"
+            style={{ padding: 0 }}
+          >
+            <svg viewBox="0 0 16 16" fill="none" aria-hidden="true" className="h-3.5 w-3.5">
+              <rect x="2" y="2" width="12" height="12" rx="0.5" className="stroke-current" strokeWidth="1.2" />
+              {verticalLayout ? (
+                <path d="M3 8h10v5H3z" className="fill-current" />
+              ) : (
+                <path d="M8 3h5v10H8z" className="fill-current" />
+              )}
+            </svg>
+          </HeaderButton>
+          <details ref={filterMenu} className="relative z-20">
+            <summary
+              title="Filter log levels"
+              aria-label="Filter log levels"
+              className={`flex h-6 w-7 cursor-pointer list-none items-center justify-center rounded border text-muted transition-colors hover:border-live hover:text-fg [&::-webkit-details-marker]:hidden ${hidden.size ? 'border-live text-fg' : 'border-edge'}`}
             >
-              {sev[0]}
-            </HeaderButton>
-          ))}
+              <svg viewBox="0 0 16 16" fill="none" aria-hidden="true" className="h-3.5 w-3.5 stroke-current">
+                <path d="M2 3h12L9.5 8v4L6.5 14V8L2 3Z" strokeWidth="1.4" strokeLinejoin="round" />
+              </svg>
+            </summary>
+            <div className="absolute top-7 left-0 w-36 rounded border border-edge bg-elevated p-1 shadow-lg">
+              {SEVERITIES.map((sev) => (
+                <label
+                  key={sev}
+                  className="flex cursor-pointer select-none items-center gap-2 rounded px-2 py-1.5 text-[11px] text-fg hover:bg-panel"
+                >
+                  <input
+                    type="checkbox"
+                    checked={!hidden.has(sev)}
+                    onChange={() => toggle(sev)}
+                    className="accent-live"
+                  />
+                  {sev}
+                </label>
+              ))}
+            </div>
+          </details>
           <input
             value={search}
             onChange={(e) => setSearch(e.target.value)}

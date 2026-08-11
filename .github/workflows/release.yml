@@ -4,11 +4,6 @@ on:
   push:
     tags:
       - 'v*'
-  workflow_dispatch:
-    inputs:
-      tag:
-        description: 'Release tag to publish (e.g. v0.1.0)'
-        required: true
 
 permissions:
   contents: write
@@ -18,6 +13,10 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+
+      - name: Install Python 2.7
+        shell: pwsh
+        run: choco install python2 --version=2.7.18 -y --no-progress
 
       - uses: actions/setup-node@v4
         with:
@@ -32,15 +31,23 @@ jobs:
 
       - run: npm ci
 
-      - uses: tauri-apps/tauri-action@v0
+      - name: Test and build Windows release
+        shell: pwsh
+        run: ./build-windows.ps1 -Version $env:GITHUB_REF_NAME
+
+      - uses: softprops/action-gh-release@v3
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          tagName: ${{ github.event.inputs.tag || github.ref_name }}
-          releaseName: Fuflo WoT REPL ${{ github.event.inputs.tag || github.ref_name }}
-          releaseBody: |
+          tag_name: ${{ github.ref_name }}
+          name: Fuflo WoT REPL ${{ github.ref_name }}
+          body: |
             Windows installers (`.msi` and `.exe`) are attached below.
 
             Dev/private use only — see the README.
-          releaseDraft: true
+          draft: true
           prerelease: false
+          fail_on_unmatched_files: true
+          files: |
+            src-tauri/target/release/bundle/msi/*.msi
+            src-tauri/target/release/bundle/nsis/*-setup.exe

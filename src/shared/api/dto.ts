@@ -29,14 +29,43 @@ export interface GameInfo {
   installed: boolean
 }
 
+export type McpStatus = 'disabled' | 'starting' | 'listening' | 'error'
+
+export interface McpConnectionInfo {
+  enabled: boolean
+  url: string
+  networkUrl: string
+  status: McpStatus
+  error: string | null
+}
+
+export interface McpCliState {
+  installed: boolean
+  configured: boolean
+}
+
+export interface McpCliStatus {
+  codex: McpCliState
+  claude: McpCliState
+}
+
 export type ServerEvent =
   | { kind: 'log'; lines: LogLine[] }
   | { kind: 'hello'; version?: string | null; pid?: number | null }
+  | { kind: 'disconnected' }
 
 export type OutFrame =
   | { type: 'hello'; version?: string | null; pid?: number | null }
   | { type: 'stdout'; stream: string; level?: string | null; text: string }
-  | { type: 'result'; id: string; ok: boolean; repr?: string | null; exc?: string | null }
+  | {
+      type: 'result'
+      id: string
+      ok: boolean
+      repr?: string | null
+      exc?: string | null
+      stdout?: string
+      stderr?: string
+    }
   | { type: 'complete'; id: string; candidates: Candidate[] }
   | { type: 'inspect'; id: string; signature?: string | null; doc?: string | null }
   | { type: 'lint'; id: string; diagnostics: Diagnostic[] }

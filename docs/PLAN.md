@@ -183,20 +183,20 @@ channels, and **main-thread marshaling** (PJOrion exec's on its daemon thread, w
 crash the client when touching render/entity objects).
 
 ```
-agent (pure py2.7 stdlib only, shipped as .wotmod + bw_site loader)
-  bw_site.py          # templated loader (see injection below)
-  agent/__init__.py
-  agent/transport.py  # buffer + file-mutex, newline-delimited JSON frames
-  agent/capture.py    # sys.stdout/stderr hijack + all 8 BigWorld.log* hooks
-  agent/runner.py     # main-thread marshaling via BigWorld.callback(0, fn)
-  agent/handlers.py   # exec | complete | inspect | lint | stubgen
-  agent/loop.py       # daemon: poll orion_buffer every 0.1s, dispatch
+mod/res/scripts/common (pure py2.7 stdlib only, shipped as a universal .mod)
+  bw_site.py          # early loader (see injection below)
+  wms_agent/__init__.py
+  wms_agent/framebus.py  # buffer + file-mutex, newline-delimited JSON frames
+  wms_agent/capture.py   # sys.stdout/stderr hijack + all 8 BigWorld.log* hooks
+  wms_agent/runner.py    # main-thread marshaling via BigWorld.callback(0, fn)
+  wms_agent/handlers.py  # exec | complete | inspect | lint | dump
+  wms_agent/loop.py      # daemon: poll buffer, dispatch
 ```
 
-**Injection (from PJOrion, kept):** loader `bw_site.pyc` adds the agent zip to `sys.path`,
-calls `agent.start(buffer_dir)`, deletes itself, then `marshal.loads` the original
-`bw_site.pyc` from `res/packages/scripts.pkg` (skip 8-byte header) and execs it, so game
-startup is transparent.
+**Injection (from PJOrion, kept):** loader `bw_site.pyc` imports the adjacent
+`wms_agent` package, calls `wms_agent.start(buffer_dir)`, then `marshal.loads` the
+original `bw_site.pyc` from `res/packages/scripts.pkg` (skip 8-byte header) and execs
+it, so game startup is transparent.
 
 **Capture (from PJOrion, kept):** wrap `sys.stdout`/`sys.stderr` (mirror to saved
 original) and monkeypatch `logTrace/logDebug/logInfo/logNotice/logWarning/logError/`
@@ -304,7 +304,7 @@ overused VS-Code blue or any banned warm-premium palette.
 | FSD lint | steiger + @feature-sliced/steiger-plugin, eslint-plugin-boundaries | |
 | Rust | notify, serde/serde_json, tokio, uuid, tauri-plugin-shell | |
 | Static worker | CPython 2.7 + jedi==0.17.2 + parso 0.7.x + pyflakes (py2) | **last py2 jedi** |
-| In-game agent | pure py2.7 stdlib only | shipped as .wotmod |
+| In-game agent | pure py2.7 stdlib only | shipped as a universal .mod |
 
 ---
 
@@ -317,7 +317,7 @@ overused VS-Code blue or any banned warm-premium palette.
 | M2 | exec round-trip | orion_buffer + main-thread runner; Monaco + Cmd+Enter; result rendered by id | M1 |
 | M3 | static completion+lint | py2.7 jedi 0.17.2 worker over wot-src; Monaco completion + markers (parso/pyflakes + compile) | M2 |
 | M4 | dynamic layer | complete/inspect/stubgen via agent; merge `live` candidates; native `.pyi` generated | M3 |
-| M5 | polish | command palette, settings (dirs), reconnect UX, .wotmod build + installer | M4 |
+| M5 | polish | command palette, settings (dirs), reconnect UX, universal .mod build + installer | M4 |
 
 M1 is the "see the game's stdout in the window" goal and is the first proof the whole
 transport works end to end.

@@ -1,0 +1,6 @@
+<root>
+    <id>me.fuflo.wotrepl</id>
+    <name>Fuflo WoT REPL Agent</name>
+    <description>Early bw_site REPL bridge for Fuflo WoT REPL (Python 2.7)</description>
+    <version>{{VERSION}}</version>
+</root>

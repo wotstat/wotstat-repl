@@ -33,6 +33,28 @@
     -webkit-font-smoothing: antialiased;
   }
 
+  button,
+  summary {
+    user-select: none;
+  }
+
+  button {
+    cursor: pointer;
+  }
+
+  button:disabled {
+    pointer-events: none;
+  }
+
+  input::placeholder {
+    user-select: none;
+  }
+
+  .monaco-editor .line-numbers {
+    -webkit-user-select: none;
+    user-select: none;
+  }
+
   ::selection {
     background: color-mix(in oklab, var(--color-live) 30%, transparent);
   }

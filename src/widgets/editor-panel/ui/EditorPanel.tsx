@@ -14,8 +14,6 @@ const SAMPLE = [
   '',
 ].join('\n')
 
-let completionDisposable: monaco.IDisposable | null = null
-
 function runEditor(editor: monaco.editor.IStandaloneCodeEditor | null) {
   if (!editor) return
   const selection = editor.getSelection()
@@ -36,7 +34,6 @@ export function EditorPanel() {
   useEffect(() => {
     const host = container.current
     if (!host) return
-    if (!completionDisposable) completionDisposable = registerPythonCompletion(monaco)
 
     const editor = monaco.editor.create(host, {
       value: loadState<string>('editor.buffer', SAMPLE),
@@ -58,6 +55,7 @@ export function EditorPanel() {
       fixedOverflowWidgets: true,
     })
     editorRef.current = editor
+    const completionDisposable = registerPythonCompletion(monaco, editor)
 
     const model = editor.getModel()
     const detachLint = model ? attachLinter(monaco, model) : () => undefined
@@ -113,6 +111,7 @@ export function EditorPanel() {
       contentSub.dispose()
       cursorSub.dispose()
       detachLint()
+      completionDisposable.dispose()
       editor.dispose()
       editorRef.current = null
     }
@@ -121,7 +120,7 @@ export function EditorPanel() {
   return (
     <Panel
       title="Editor"
-      className="flex-1 border-r border-edge"
+      className="w-full"
       actions={
         <HeaderButton
           onClick={() => runEditor(editorRef.current)}

@@ -1,4 +1,4 @@
-# Fuflo WoT REPL early loader (Python 2.7 / BigWorld) -- GENERATED into the mod.
+# Fuflo WoT REPL early loader (Python 2.7 / BigWorld).
 #
 # Installed as scripts/common/bw_site.py via the .mtmod res overlay, so it loads
 # at site-init time (the earliest point, like PJOrion) and its stdout/BigWorld.log
@@ -35,3 +35,16 @@ except Exception:
     import traceback
     print 'Fuflo WoT REPL: original bw_site load failed'
     print traceback.format_exc()
+
+# Preserve the game's shutdown hook while letting the agent tell the desktop
+# about a normal client exit before the original cleanup runs.
+_agent = globals().get('wms_agent')
+_original_fini = globals().get('fini')
+
+def fini():
+    try:
+        if _agent is not None:
+            _agent.stop()
+    finally:
+        if _original_fini is not None:
+            _original_fini()

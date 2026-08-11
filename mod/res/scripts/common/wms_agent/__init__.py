@@ -9,7 +9,8 @@ Public API:
     stop()             -> restore stdout and stop the loop
 """
 
+__version__ = '{{VERSION}}'
+
 from .loop import start, stop
 
 __all__ = ['start', 'stop']
-__version__ = '0.1.0'

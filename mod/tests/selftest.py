@@ -9,7 +9,8 @@ import sys
 import shutil
 import tempfile
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.abspath(os.path.join(
+    os.path.dirname(__file__), '..', 'res', 'scripts', 'common')))
 
 from wms_agent.framebus import FrameBus
 from wms_agent import handlers
