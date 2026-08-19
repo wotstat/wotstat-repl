@@ -3,12 +3,13 @@
   "private": true,
   "version": "0.4.0",
   "type": "module",
+  "packageManager": "bun@1.3.14",
   "scripts": {
-    "dev": "vite",
-    "build": "tsc --noEmit && vite build",
-    "preview": "vite preview",
-    "tauri": "tauri",
-    "lint:fsd": "steiger ./src"
+    "dev": "bunx --bun vite",
+    "build": "bunx --bun tsc --noEmit && bunx --bun vite build",
+    "preview": "bunx --bun vite preview",
+    "tauri": "bun ./node_modules/@tauri-apps/cli/tauri.js",
+    "lint:fsd": "bunx --bun steiger ./src"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.11.0",
@@ -25,7 +26,7 @@
     "@feature-sliced/steiger-plugin": "^0.6.0",
     "@tailwindcss/vite": "^4.3.0",
     "@tauri-apps/cli": "^2.11.0",
-    "@types/node": "^25.9.3",
+    "@types/bun": "^1.3.14",
     "@types/react": "^19.2.0",
     "@types/react-dom": "^19.2.0",
     "@vitejs/plugin-react": "^6.0.0",

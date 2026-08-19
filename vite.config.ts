@@ -7,6 +7,13 @@ const host = process.env.TAURI_DEV_HOST
 
 export default defineConfig({
   plugins: [react(), tailwindcss()],
+  build: {
+    // The UI is bundled into the desktop app and never crosses a network.
+    chunkSizeWarningLimit: 6_000,
+    rolldownOptions: {
+      output: { codeSplitting: false },
+    },
+  },
   resolve: {
     alias: { '@': path.resolve(import.meta.dirname, 'src') },
   },

@@ -22,7 +22,10 @@ async function collect(code: string): Promise<Diagnostic[]> {
   }
 }
 
-export function attachLinter(m: typeof monaco, model: monaco.editor.ITextModel): () => void {
+export function attachLinter(
+  m: Pick<typeof monaco, 'editor'>,
+  model: monaco.editor.ITextModel,
+): () => void {
   let timer: number | undefined
 
   const run = async () => {

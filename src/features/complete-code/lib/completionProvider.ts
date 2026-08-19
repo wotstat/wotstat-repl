@@ -104,7 +104,7 @@ async function gather(prefixLine: string, fullCode: string, line: number, column
 }
 
 export function registerPythonCompletion(
-  m: typeof monaco,
+  m: Pick<typeof monaco, 'languages'>,
   editor: monaco.editor.IStandaloneCodeEditor,
 ): monaco.IDisposable {
   const resolutions = new WeakMap<monaco.languages.CompletionItem, ResolutionState>()

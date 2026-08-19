@@ -35,17 +35,17 @@ offline) merged with dynamic runtime introspection from the live game.
 
 ## Layout
 
-| Path | What |
-|---|---|
-| `src/` | FSD frontend (`app` / `pages` / `widgets` / `features` / `entities` / `shared`) |
-| `src-tauri/` | Rust backend (protocol, transport, jedi supervisor, commands) |
-| `mod/` | universal `.mod` source tree, Python 2.7 builder, and agent tests |
-| `tools/jedi_worker/` | CPython 2.7 jedi static worker (stdio JSON) |
-| `docs/PLAN.md` | full implementation plan |
+| Path                 | What                                                                            |
+| -------------------- | ------------------------------------------------------------------------------- |
+| `src/`               | FSD frontend (`app` / `pages` / `widgets` / `features` / `entities` / `shared`) |
+| `src-tauri/`         | Rust backend (protocol, transport, jedi supervisor, commands)                   |
+| `mod/`               | universal `.mod` source tree, Python 2.7 builder, and agent tests               |
+| `tools/jedi_worker/` | CPython 2.7 jedi static worker (stdio JSON)                                     |
+| `docs/PLAN.md`       | full implementation plan                                                        |
 
 ## Prerequisites
 
-- Node 20+ and Rust 1.88+ (desktop app)
+- Bun 1.3.14+ and Rust 1.88+ (desktop app)
 - CPython **2.7** for the in-game agent and the jedi static worker
   (`jedi==0.17.2` + `parso 0.7.x` are the last py2-capable releases; see
   `tools/jedi_worker/requirements.txt`). The `python27.dll` + stdlib bundled with
@@ -54,10 +54,11 @@ offline) merged with dynamic runtime introspection from the live game.
 ## Develop
 
 ```sh
-npm install
-npm run dev            # frontend development server
-npm run build          # tsc + vite production build
-npm run lint:fsd       # steiger FSD boundary check
+bun install
+bun run dev            # frontend development server
+bun run build          # tsc + vite production build
+bun run lint:fsd       # steiger FSD boundary check
+bun run tauri build    # Tauri CLI through Bun (also works on Windows)
 ```
 
 ## MCP setup
@@ -81,14 +82,14 @@ on TCP port 8765.
 
 The server exposes exactly six tools:
 
-| Tool | Parameters and behavior |
-|---|---|
-| `wot_list_clients` | No parameters. Lists detected installations and their process/agent status. |
-| `wot_start_client` | `game_dir`, optional `replay_path`. Installs/connects the agent as needed and starts that client; starting the already-active client is a no-op, and only one client may be active. |
-| `wot_close_client` | Optional `timeout_ms` (default 10000, clamped to 0..60000). Requests graceful shutdown and waits; it never escalates automatically to kill. |
-| `wot_kill_client` | No parameters. Force-terminates the saved active process after executable identity verification. |
-| `wot_exec` | `code`, optional `timeout_ms` (default 30000, clamped to 1..30000). Runs arbitrary Python on the game main thread. A Python exception is a successful tool result with `ok: false`; connection, timeout, validation, and other tool failures return MCP `isError: true`. |
-| `wot_read_log` | Optional `cursor`, `limit` (default 200, clamped to 1..1000), and `wait_ms` (default 0, clamped to 0..5000). Returns newer entries after a cursor, or the latest entries when omitted; history is bounded to 10,000 entries and 4 MiB of UTF-8 text, with `truncated` indicating lost history. |
+| Tool               | Parameters and behavior                                                                                                                                                                                                                                                                        |
+| ------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `wot_list_clients` | No parameters. Lists detected installations and their process/agent status.                                                                                                                                                                                                                    |
+| `wot_start_client` | `game_dir`, optional `replay_path`. Installs/connects the agent as needed and starts that client; starting the already-active client is a no-op, and only one client may be active.                                                                                                            |
+| `wot_close_client` | Optional `timeout_ms` (default 10000, clamped to 0..60000). Requests graceful shutdown and waits; it never escalates automatically to kill.                                                                                                                                                    |
+| `wot_kill_client`  | No parameters. Force-terminates the saved active process after executable identity verification.                                                                                                                                                                                               |
+| `wot_exec`         | `code`, optional `timeout_ms` (default 30000, clamped to 1..30000). Runs arbitrary Python on the game main thread. A Python exception is a successful tool result with `ok: false`; connection, timeout, validation, and other tool failures return MCP `isError: true`.                       |
+| `wot_read_log`     | Optional `cursor`, `limit` (default 200, clamped to 1..1000), and `wait_ms` (default 0, clamped to 0..5000). Returns newer entries after a cursor, or the latest entries when omitted; history is bounded to 10,000 entries and 4 MiB of UTF-8 text, with `truncated` indicating lost history. |
 
 Security is intentionally minimal: the URL token is a bearer-like gate, HTTP has
 no TLS, and the listener binds on every interface. Use it only on a trusted
@@ -106,19 +107,3 @@ may include the Git tag's `v` prefix. The same version is used for the universal
 and Tauri installers. The script also runs the Python 2.7 agent and Rust tests,
 checks FSD boundaries, and produces the final Windows installers. The release
 workflow calls the same script from a clean checkout.
-
-## Status
-
-| Milestone | State |
-|---|---|
-| M0 scaffold (Tauri + React + TS + Tailwind 4 + FSD) | done, builds green |
-| M1 stdout stream | code complete; agent capture + Rust watcher + xterm wired |
-| M2 exec round-trip | code complete; Monaco + main-thread runner |
-| M3 static completion/lint | code complete; jedi worker + Monaco providers |
-| M4 dynamic layer | code complete; runtime complete/inspect/stubgen + merge |
-| M5 polish | command palette, connect controls, design system |
-
-Verified without a game: frontend `tsc`+`vite` build, `cargo check`, steiger FSD
-check, agent unit + integration tests (`mod/tests/selftest.py`, `mod/tests/itest.py`), jedi
-worker protocol. **Needs a live WoT client** to validate `BigWorld.callback`
-main-thread marshaling, the real log volume, and end-to-end injection.

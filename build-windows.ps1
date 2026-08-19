@@ -21,11 +21,8 @@ try {
         throw "Python 2.7 not found at $python"
     }
 
-    if (-not (Test-Path 'node_modules/.bin/steiger.cmd') -or
-        -not (Test-Path 'node_modules/.bin/tauri.cmd')) {
-        npm ci
-        if ($LASTEXITCODE -ne 0) { throw 'npm dependency install failed' }
-    }
+    bun install --frozen-lockfile
+    if ($LASTEXITCODE -ne 0) { throw 'Bun dependency install failed' }
 
     $mod = 'src-tauri/resources/wotstat.repl.mod'
     Remove-Item $mod -Force -ErrorAction SilentlyContinue
@@ -41,12 +38,12 @@ try {
     cargo test --manifest-path src-tauri/Cargo.toml
     if ($LASTEXITCODE -ne 0) { throw 'Rust tests failed' }
 
-    npm run lint:fsd
+    bun run lint:fsd
     if ($LASTEXITCODE -ne 0) { throw 'FSD lint failed' }
 
     @{ version = $Version } | ConvertTo-Json -Compress |
         Set-Content $tauriConfig -Encoding ASCII
-    npm run tauri build -- --config $tauriConfig
+    bun run tauri build --config $tauriConfig
     if ($LASTEXITCODE -ne 0) { throw 'Tauri build failed' }
 } finally {
     Remove-Item $tauriConfig -Force -ErrorAction SilentlyContinue
