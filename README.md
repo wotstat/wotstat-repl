@@ -61,10 +61,3 @@ The server exposes six tools:
 | `wot_read_log`     | Read recent log messages; supports `cursor`, `limit`, and a short wait through `wait_ms`.                |
 
 `wot_exec` can change the game state, while `wot_close_client` and `wot_kill_client` terminate the process. Start an MCP client session with `wot_list_clients`, and use `wot_close_client` before resorting to forced termination.
-
-## Architecture and development
-
-- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — application components and their interactions.
-- [`docs/PROTOCOL.md`](docs/PROTOCOL.md) — file-based protocol between the application and the in-game agent.
-
-The main code lives in `src/` (React/TypeScript, Feature-Sliced Design), `src-tauri/` (Tauri/Rust), and `mod/` (the Python 2.7 agent and its tests).

@@ -1,6 +1,6 @@
 """Newline-delimited JSON frame transport over two append files.
 
-Shared directory layout (see docs/PROTOCOL.md):
+Shared directory layout:
     c2d         game -> desktop frames (one JSON object per line)
     d2c         desktop -> game frames
     c2d.lock    exclusive-create lock guarding c2d

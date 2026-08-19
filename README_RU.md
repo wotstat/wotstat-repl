@@ -61,10 +61,3 @@ codex mcp add wot_repl --url "http://127.0.0.1:8765/mcp?token=<токен>"
 | `wot_read_log`     | Прочитать свежие сообщения лога; поддерживает `cursor`, `limit` и короткое ожидание через `wait_ms`.          |
 
 `wot_exec` способен менять состояние игры, а `wot_close_client` и `wot_kill_client` завершают процесс. Начинайте работу MCP-клиента с `wot_list_clients` и используйте `wot_close_client` прежде, чем прибегать к принудительному завершению.
-
-## Архитектура и разработка
-
-- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — состав приложения и взаимодействие компонентов.
-- [`docs/PROTOCOL.md`](docs/PROTOCOL.md) — файловый протокол обмена между приложением и игровым агентом.
-
-Основной код находится в `src/` (React/TypeScript, Feature-Sliced Design), `src-tauri/` (Tauri/Rust) и `mod/` (агент Python 2.7 и его тесты).

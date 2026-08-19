@@ -45,8 +45,6 @@ jobs:
 
             - `wotstat-repl.exe` runs directly without installation. On a standard Windows 10/11 system, this is all you need.
             - `*-setup.exe` installs the app and ensures that the WebView2 runtime is available.
-
-            Dev/private use only — see the README.
           draft: true
           prerelease: false
           fail_on_unmatched_files: true
