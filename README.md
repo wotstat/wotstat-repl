@@ -1,6 +1,6 @@
 ### | EN | [RU](./README_RU.md) |
 
-# WotStat WoT REPL
+# WotStat REPL
 
 A desktop application for developing mods for **World of Tanks** and **Mir Tankov**. It connects to a running client, executes Python 2.7 code on the game thread, and displays live output.
 
@@ -19,10 +19,20 @@ A desktop application for developing mods for **World of Tanks** and **Mir Tanko
 
 ## Installation
 
-The [latest release](https://github.com/wotstat/wotstat-repl/releases/latest) provides two Windows downloads:
+The [latest release](https://github.com/wotstat/wotstat-repl/releases/latest)
+provides desktop builds and the game mod:
 
-- `wotstat-repl.exe` — the ready-to-run application with no installation required. On a standard, unmodified Windows 10/11 system, download it and run it directly.
-- `wotstat-repl_<version>_x64-setup.exe` — an installer with shortcuts and standard uninstall support. Use it if Microsoft Edge WebView2 is missing from the system or if you prefer a regular installation.
+- Windows x64: portable `wotstat-repl.exe` and the
+  `wotstat-repl_<version>_x64-setup.exe` installer.
+- macOS: a universal `.dmg` for Apple Silicon and Intel Macs.
+- Linux x64: `.AppImage` and `.deb` packages.
+- `wotstat.repl_<version>.wotmod` for manual game installation.
+
+The same `.wotmod` is embedded in every desktop build. When the application can
+access a local game installation, it installs the embedded copy automatically;
+the standalone file is intended for a game on another machine or a manual
+installation. macOS and Linux builds can connect to a remote/Proton game, but
+do not directly launch a Windows game executable.
 
 ## Usage
 
@@ -30,6 +40,29 @@ The [latest release](https://github.com/wotstat/wotstat-repl/releases/latest) pr
 2. Select a client and click **Launch Game**. To launch a replay, use the arrow beside that button and select a `.wotreplay` or `.mtreplay` file.
 3. The application installs the agent into the selected client's `mods/<version>` directory, starts the game, and waits for the **Connected** status. If the game is already running and the agent was installed previously, click **Connect**.
 4. Enter code in the editor and press `Ctrl/Cmd+Enter`. The selection is executed, or the entire editor when nothing is selected. Results and logs appear in the console on the right.
+
+## Agent network
+
+The in-game agent connects to the desktop over a persistent TCP connection.
+Token authentication is enabled by default. Local sessions listen only on
+`127.0.0.1:8766`. The agent reconnects automatically and retains up to 8 MiB of
+unacknowledged output in memory, so the game and UI may start in either order
+and startup logs arrive when the UI comes online while the game is still
+running. A UI session controls only the first agent that connects; additional
+game clients keep retrying and can take over only after the active client exits.
+
+To run the game and UI on different machines, open **Agent local** in the status
+bar and enable **Accept LAN connections**. Keep **Secure connection** enabled
+(the default) and copy the remote game config to
+`mods\configs\wotstat-repl\agent-network.json` under the Windows game root.
+Alternatively, disable **Secure connection** and remove the config: the agent
+uses the default ports and finds the UI automatically, but any reachable agent
+can then use the REPL. The agent discovers the UI over UDP port `8767`, then
+opens an outgoing TCP connection to port `8766`. These are regular unprivileged
+sockets; administrator rights are not required, although the UI machine's
+firewall may ask whether to allow LAN traffic. If the network blocks broadcast,
+an explicit UI IPv4 address is still required in the config. See
+[the agent protocol](docs/AGENT_PROTOCOL.md) for the wire-level details.
 
 Autocomplete comes directly from the connected client. The in-game agent walks live objects with `dir()`/`getattr()`, reads typed native signatures from `__doc__`, and falls back to Python runtime inspection for regular functions and bound methods. Results are cached with bounded, short-lived caches to keep repeated completion responsive.
 
@@ -53,11 +86,15 @@ The server exposes six tools:
 
 | Tool               | Purpose                                                                                                  |
 | ------------------ | -------------------------------------------------------------------------------------------------------- |
-| `wot_list_clients` | Find supported game installations and report their status.                                               |
-| `wot_start_client` | Install/connect the agent and launch a client; accepts `game_dir` and optional `replay_path`.            |
-| `wot_close_client` | Gracefully close the active client; optional `timeout_ms` is limited to 0–60000.                         |
-| `wot_kill_client`  | Force-terminate the active client after verifying its process.                                           |
+| `wot_list_clients` | Report local installations and the currently connected remote game, including capabilities.             |
+| `wot_start_client` | Install/connect the agent and launch a local client; accepts `game_dir` and optional `replay_path`.      |
+| `wot_close_client` | Gracefully close the active local client; optional `timeout_ms` is limited to 0–60000.                   |
+| `wot_kill_client`  | Force-terminate the active local client after verifying its process.                                     |
 | `wot_exec`         | Run Python 2.7 code on the game's main thread; accepts `code` and optional `timeout_ms` from 1 to 30000. |
 | `wot_read_log`     | Read recent log messages; supports `cursor`, `limit`, and a short wait through `wait_ms`.                |
 
-`wot_exec` can change the game state, while `wot_close_client` and `wot_kill_client` terminate the process. Start an MCP client session with `wot_list_clients`, and use `wot_close_client` before resorting to forced termination.
+`wot_list_clients` marks every entry as `local` or `remote` and returns explicit
+`repl`, `start`, `close`, and `kill` capabilities. A remote entry intentionally
+has no local `path` or `exe`: it supports `wot_exec` and `wot_read_log`, but the
+desktop cannot launch or terminate its process. For local clients, use
+`wot_close_client` before resorting to forced termination.

@@ -1,11 +1,11 @@
-"""WotStat WoT REPL in-game agent (Python 2.7 / BigWorld).
+"""WotStat REPL in-game agent (Python 2.7 / BigWorld).
 
 Loaded inside the running WoT client by the bw_site loader. Exposes a tiny
-file-buffer RPC the desktop app drives: it streams captured stdout/log output
-and answers exec/complete/inspect/lint requests on the game main thread.
+authenticated TCP RPC the desktop app drives: it streams captured stdout/log
+output and answers exec/complete/inspect/lint requests on the game main thread.
 
 Public API:
-    start(buffer_dir)  -> begin serving
+    start(config_dir)  -> begin serving
     stop()             -> restore stdout and stop the loop
 """
 

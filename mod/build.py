@@ -105,7 +105,7 @@ def _verify(output, version):
 
 
 def main():
-    parser = argparse.ArgumentParser(description='Build the universal WotStat WoT REPL .mod')
+    parser = argparse.ArgumentParser(description='Build the universal WotStat REPL .mod')
     parser.add_argument('--version', required=True)
     parser.add_argument('--out', required=True)
     args = parser.parse_args()

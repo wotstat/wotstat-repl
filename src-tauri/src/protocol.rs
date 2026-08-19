@@ -7,7 +7,6 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum InFrame {
-    Hello,
     Exec {
         id: String,
         code: String,
@@ -28,13 +27,12 @@ pub enum InFrame {
 }
 
 impl InFrame {
-    pub fn id(&self) -> Option<&str> {
+    pub fn id(&self) -> &str {
         match self {
-            InFrame::Hello => None,
             InFrame::Exec { id, .. }
             | InFrame::Complete { id, .. }
             | InFrame::Inspect { id, .. }
-            | InFrame::Lint { id, .. } => Some(id),
+            | InFrame::Lint { id, .. } => id,
         }
     }
 }
@@ -44,12 +42,6 @@ impl InFrame {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum OutFrame {
     Disconnected,
-    Hello {
-        #[serde(default)]
-        version: Option<String>,
-        #[serde(default)]
-        pid: Option<i64>,
-    },
     Stdout {
         stream: String,
         #[serde(default)]
@@ -90,7 +82,7 @@ impl OutFrame {
     /// The request id this frame answers, or `None` for async frames (stdout, hello).
     pub fn correlation_id(&self) -> Option<&str> {
         match self {
-            OutFrame::Disconnected | OutFrame::Hello { .. } | OutFrame::Stdout { .. } => None,
+            OutFrame::Disconnected | OutFrame::Stdout { .. } => None,
             OutFrame::Result { id, .. }
             | OutFrame::Complete { id, .. }
             | OutFrame::Inspect { id, .. }
@@ -135,6 +127,7 @@ pub enum ServerEvent {
     Hello {
         version: Option<String>,
         pid: Option<i64>,
+        remote: bool,
     },
     Disconnected,
 }

@@ -1,6 +1,6 @@
 <root>
     <id>wotstat.repl</id>
-    <name>WotStat WoT REPL Agent</name>
-    <description>Early bw_site REPL bridge for WotStat WoT REPL (Python 2.7)</description>
+    <name>WotStat REPL Agent</name>
+    <description>Early bw_site REPL bridge for WotStat REPL (Python 2.7)</description>
     <version>{{VERSION}}</version>
 </root>

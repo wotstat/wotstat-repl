@@ -13,7 +13,7 @@ use crate::install::{self, GameInfo};
 use crate::mcp::McpRuntime;
 use crate::process;
 use crate::protocol::{InFrame, LogLine, OutFrame, ServerEvent};
-use crate::transport::{EventSink, FileBufferTransport};
+use crate::transport::{AgentConfigStore, AgentConnectionInfo, EventSink, NetworkTransport};
 
 const LOG_MAX_ENTRIES: usize = 10_000;
 const LOG_MAX_TEXT_BYTES: usize = 4 * 1024 * 1024;
@@ -42,14 +42,33 @@ pub enum AgentStatus {
     Unresponsive,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ClientKind {
+    Local,
+    Remote,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct ClientCapabilities {
+    pub repl: bool,
+    pub start: bool,
+    pub close: bool,
+    pub kill: bool,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ClientStatus {
     #[serde(flatten)]
-    pub game: GameInfo,
+    pub game: Option<GameInfo>,
+    pub kind: ClientKind,
     pub process_status: ProcessStatus,
     pub agent_status: AgentStatus,
     pub pid: Option<u32>,
+    pub agent_version: Option<String>,
+    pub agent_pid: Option<i64>,
+    pub capabilities: ClientCapabilities,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -81,16 +100,18 @@ struct PendingRequest {
     generation: u64,
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub struct ClientManager {
     inner: Arc<Mutex<ClientState>>,
     log_notify: Arc<Notify>,
+    agent_config: Arc<AgentConfigStore>,
 }
 
 #[derive(Default)]
 struct ClientState {
-    transport: Option<Arc<FileBufferTransport>>,
+    transport: Option<Arc<NetworkTransport>>,
     active: Option<ActiveClient>,
+    remote: Option<RemoteClient>,
     connection_generation: u64,
     logs: LogBuffer,
 }
@@ -110,6 +131,14 @@ struct ActiveClient {
     pid: Option<u32>,
     process_status: ProcessStatus,
     agent_status: AgentStatus,
+    agent_version: Option<String>,
+}
+
+#[derive(Clone)]
+struct RemoteClient {
+    agent_version: Option<String>,
+    agent_pid: Option<i64>,
+    agent_status: AgentStatus,
 }
 
 #[derive(Debug)]
@@ -118,15 +147,44 @@ enum StartDecision {
     Already(ClientStatus),
 }
 
+impl Default for ClientManager {
+    fn default() -> Self {
+        Self::with_config_path(install::app_data_root().join("agent-network.json"))
+    }
+}
+
 impl ClientManager {
-    pub fn connect(&self, dir: PathBuf, sink: EventSink) -> Result<(), String> {
-        std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    fn with_config_path(path: PathBuf) -> Self {
+        Self {
+            inner: Arc::new(Mutex::new(ClientState::default())),
+            log_notify: Arc::new(Notify::new()),
+            agent_config: Arc::new(AgentConfigStore::new(path)),
+        }
+    }
+
+    pub fn connection_info(&self) -> Result<AgentConnectionInfo, String> {
+        self.agent_config.connection_info()
+    }
+
+    pub fn install_agent(&self, game_dir: &str, mods_version: &str) -> Result<(), String> {
+        let config = self.agent_config.load_or_create()?;
+        let body = serde_json::to_vec_pretty(&config).map_err(|error| error.to_string())?;
+        install::install_agent(game_dir, mods_version, &body)
+    }
+
+    pub fn connect(
+        &self,
+        lan_enabled: bool,
+        secure_enabled: bool,
+        sink: EventSink,
+    ) -> Result<(), String> {
         let (generation, old) = {
             let mut state = self
                 .inner
                 .lock()
                 .map_err(|_| "state lock poisoned".to_string())?;
             state.connection_generation = state.connection_generation.wrapping_add(1);
+            state.remote = None;
             if let Some(active) = &mut state.active {
                 if active.process_status != ProcessStatus::Stopped {
                     active.agent_status = AgentStatus::Connecting;
@@ -141,15 +199,21 @@ impl ClientManager {
         let log_notify = Arc::clone(&self.log_notify);
         let tracked_sink: EventSink = Arc::new(move |event| {
             let attached = match &event {
-                ServerEvent::Hello { pid: Some(pid), .. } => {
-                    u32::try_from(*pid).ok().and_then(game_for_process)
-                }
+                ServerEvent::Hello {
+                    pid: Some(pid),
+                    remote: false,
+                    ..
+                } => u32::try_from(*pid).ok().and_then(game_for_process),
                 _ => None,
             };
             let (current, log_changed) = if let Ok(mut state) = state.lock() {
                 if state.connection_generation == generation {
                     let log_changed = match &event {
-                        ServerEvent::Hello { pid, .. } => state.agent_connected(*pid, attached),
+                        ServerEvent::Hello {
+                            version,
+                            pid,
+                            remote,
+                        } => state.agent_connected(*pid, version.clone(), *remote, attached),
                         ServerEvent::Disconnected => {
                             state.agent_disconnected();
                             false
@@ -170,7 +234,8 @@ impl ClientManager {
                 sink(event);
             }
         });
-        let transport = FileBufferTransport::start(dir, tracked_sink);
+        let config = self.agent_config.load_or_create()?;
+        let transport = NetworkTransport::start(config, lan_enabled, secure_enabled, tracked_sink)?;
         let mut state = self
             .inner
             .lock()
@@ -200,9 +265,6 @@ impl ClientManager {
     }
 
     fn request(&self, frame: InFrame) -> Result<PendingRequest, String> {
-        if frame.id().is_none() {
-            return Err("control frames cannot be requested".to_string());
-        }
         let (transport, generation) = {
             let state = self
                 .inner
@@ -316,7 +378,7 @@ impl ClientManager {
             StartDecision::Reserved => {}
         }
 
-        if let Err(error) = install::install_agent(&game.path, &game.mods_version) {
+        if let Err(error) = self.install_agent(&game.path, &game.mods_version) {
             self.fail_start(&game);
             return Err(error);
         }
@@ -327,7 +389,7 @@ impl ClientManager {
                 }
             }
         }
-        if let Err(error) = self.connect(install::default_buffer_dir_path(), sink) {
+        if let Err(error) = self.connect(false, true, sink) {
             self.fail_start(&game);
             return Err(error);
         }
@@ -450,6 +512,12 @@ impl ClientManager {
             .lock()
             .map_err(|_| "state lock poisoned".to_string())?;
         state.refresh_process();
+        if state.remote.is_some() {
+            return Err(
+                "REMOTE_CLIENT_UNMANAGED: the connected game is remote; use REPL and log tools, not process-control tools"
+                    .to_string(),
+            );
+        }
         let active = state
             .active
             .as_ref()
@@ -477,6 +545,12 @@ impl ClientManager {
 
 impl ClientState {
     fn reserve_start(&mut self, game: GameInfo) -> Result<StartDecision, String> {
+        if self.remote.is_some() {
+            return Err(
+                "REMOTE_CLIENT_ACTIVE: a remote game is connected; it supports REPL and logs but cannot be started from this UI"
+                    .to_string(),
+            );
+        }
         if let Some(active) = &self.active {
             if active.process_status != ProcessStatus::Stopped {
                 if same_game(&active.game, &game) {
@@ -500,6 +574,7 @@ impl ClientState {
             pid: None,
             process_status: ProcessStatus::Starting,
             agent_status,
+            agent_version: None,
         });
         Ok(StartDecision::Reserved)
     }
@@ -511,10 +586,19 @@ impl ClientState {
             .cloned()
             .map(ClientStatus::from)
             .unwrap_or(ClientStatus {
-                game,
+                game: Some(game),
+                kind: ClientKind::Local,
                 process_status: ProcessStatus::Stopped,
                 agent_status: AgentStatus::Unavailable,
                 pid: None,
+                agent_version: None,
+                agent_pid: None,
+                capabilities: ClientCapabilities {
+                    repl: false,
+                    start: true,
+                    close: false,
+                    kill: false,
+                },
             })
     }
 
@@ -524,10 +608,14 @@ impl ClientState {
                 games.push(active.game.clone());
             }
         }
-        games
+        let mut statuses: Vec<_> = games
             .into_iter()
             .map(|game| self.status_for(game))
-            .collect()
+            .collect();
+        if let Some(remote) = &self.remote {
+            statuses.push(remote.clone().into());
+        }
+        statuses
     }
 
     fn refresh_process(&mut self) {
@@ -547,38 +635,59 @@ impl ClientState {
     fn agent_connected(
         &mut self,
         reported_pid: Option<i64>,
+        agent_version: Option<String>,
+        remote_connection: bool,
         attached_game: Option<GameInfo>,
     ) -> bool {
-        let reported_pid = reported_pid.and_then(|pid| u32::try_from(pid).ok());
+        if remote_connection {
+            let cleared = self.logs.clear();
+            self.remote = Some(RemoteClient {
+                agent_version,
+                agent_pid: reported_pid,
+                agent_status: AgentStatus::Ready,
+            });
+            return cleared;
+        }
+        let local_pid = reported_pid.and_then(|pid| u32::try_from(pid).ok());
         let can_attach = self
             .active
             .as_ref()
             .map(|active| active.process_status == ProcessStatus::Stopped)
             .unwrap_or(true);
         if can_attach {
-            let (Some(pid), Some(game)) = (reported_pid, attached_game) else {
-                return false;
-            };
             let cleared = self.logs.clear();
-            let expected_exe = PathBuf::from(&game.path).join(&game.exe);
-            self.active = Some(ActiveClient {
-                game,
-                expected_exe,
-                pid: Some(pid),
-                process_status: ProcessStatus::Running,
-                agent_status: AgentStatus::Ready,
-            });
+            if let (Some(pid), Some(game)) = (local_pid, attached_game) {
+                let expected_exe = PathBuf::from(&game.path).join(&game.exe);
+                self.active = Some(ActiveClient {
+                    game,
+                    expected_exe,
+                    pid: Some(pid),
+                    process_status: ProcessStatus::Running,
+                    agent_status: AgentStatus::Ready,
+                    agent_version,
+                });
+                self.remote = None;
+            } else {
+                self.remote = Some(RemoteClient {
+                    agent_version,
+                    agent_pid: reported_pid,
+                    agent_status: AgentStatus::Ready,
+                });
+            }
             return cleared;
         }
         let active = self.active.as_mut().unwrap();
-        if active.pid.is_none() || (reported_pid.is_some() && active.pid != reported_pid) {
+        if active.pid.is_none() || (local_pid.is_some() && active.pid != local_pid) {
             return false;
         }
         active.agent_status = AgentStatus::Ready;
+        active.agent_version = agent_version;
+        self.remote = None;
         false
     }
 
     fn agent_disconnected(&mut self) {
+        self.remote = None;
         if let Some(active) = &mut self.active {
             active.agent_status = AgentStatus::Unavailable;
         }
@@ -586,6 +695,10 @@ impl ClientState {
 
     fn agent_responded(&mut self, generation: u64) {
         if self.connection_generation != generation {
+            return;
+        }
+        if let Some(remote) = &mut self.remote {
+            remote.agent_status = AgentStatus::Ready;
             return;
         }
         if let Some(active) = &mut self.active {
@@ -597,6 +710,12 @@ impl ClientState {
 
     fn agent_timed_out(&mut self, generation: u64) {
         if self.connection_generation != generation {
+            return;
+        }
+        if let Some(remote) = &mut self.remote {
+            if remote.agent_status != AgentStatus::Unavailable {
+                remote.agent_status = AgentStatus::Unresponsive;
+            }
             return;
         }
         if let Some(active) = &mut self.active {
@@ -686,11 +805,42 @@ fn truncate_utf8(text: &str, max_bytes: usize) -> String {
 
 impl From<ActiveClient> for ClientStatus {
     fn from(active: ActiveClient) -> Self {
+        let can_control_process =
+            active.pid.is_some() && active.process_status != ProcessStatus::Stopped;
         Self {
-            game: active.game,
+            game: Some(active.game),
+            kind: ClientKind::Local,
             process_status: active.process_status,
             agent_status: active.agent_status,
             pid: active.pid,
+            agent_version: active.agent_version,
+            agent_pid: None,
+            capabilities: ClientCapabilities {
+                repl: active.agent_status == AgentStatus::Ready,
+                start: active.process_status == ProcessStatus::Stopped,
+                close: can_control_process,
+                kill: can_control_process,
+            },
+        }
+    }
+}
+
+impl From<RemoteClient> for ClientStatus {
+    fn from(remote: RemoteClient) -> Self {
+        Self {
+            game: None,
+            kind: ClientKind::Remote,
+            process_status: ProcessStatus::Running,
+            agent_status: remote.agent_status,
+            pid: None,
+            agent_version: remote.agent_version,
+            agent_pid: remote.agent_pid,
+            capabilities: ClientCapabilities {
+                repl: remote.agent_status == AgentStatus::Ready,
+                start: false,
+                close: false,
+                kill: false,
+            },
         }
     }
 }
@@ -813,7 +963,7 @@ mod tests {
             let mut state = manager.inner.lock().unwrap();
             state.active.as_mut().unwrap().process_status = ProcessStatus::Stopped;
             state.logs.push_lines(&[log_line("old attach")]);
-            assert!(state.agent_connected(Some(42), Some(same_game)));
+            assert!(state.agent_connected(Some(42), Some("test".into()), false, Some(same_game)));
         }
         let after_attach = manager.read_log_now(Some(1), 10).unwrap();
         assert!(after_attach.entries.is_empty());
@@ -845,7 +995,7 @@ mod tests {
         let active = state.active.as_mut().unwrap();
         active.pid = Some(42);
         active.process_status = ProcessStatus::Running;
-        state.agent_connected(Some(42), None);
+        state.agent_connected(Some(42), Some("test".into()), false, None);
         let active = state.active.as_ref().unwrap();
         assert_eq!(active.process_status, ProcessStatus::Running);
         assert_eq!(active.agent_status, AgentStatus::Ready);
@@ -886,24 +1036,91 @@ mod tests {
     fn hello_attaches_a_verified_game_to_the_empty_state() {
         let mut state = ClientState::default();
         let attached = game("C:/Games/one");
-        state.agent_connected(Some(42), Some(attached));
+        state.agent_connected(Some(42), Some("test".into()), false, Some(attached));
 
         let status = state.statuses(Vec::new()).pop().unwrap();
+        assert_eq!(status.kind, ClientKind::Local);
         assert_eq!(status.pid, Some(42));
         assert_eq!(status.process_status, ProcessStatus::Running);
         assert_eq!(status.agent_status, AgentStatus::Ready);
+        assert!(status.capabilities.repl);
+        assert!(status.capabilities.close);
+        assert!(status.capabilities.kill);
+    }
+
+    #[test]
+    fn remote_agent_is_listed_without_local_process_controls() {
+        let mut state = ClientState::default();
+        state.agent_connected(
+            Some(4242),
+            Some("0.4.1".into()),
+            true,
+            Some(game("C:/Games/coincidental-pid")),
+        );
+
+        let statuses = state.statuses(vec![game("C:/Games/local")]);
+        assert_eq!(statuses.len(), 2);
+        let remote = statuses
+            .iter()
+            .find(|status| status.kind == ClientKind::Remote)
+            .unwrap();
+        assert!(remote.game.is_none());
+        assert_eq!(remote.pid, None);
+        assert_eq!(remote.agent_pid, Some(4242));
+        assert_eq!(remote.agent_version.as_deref(), Some("0.4.1"));
+        assert!(remote.capabilities.repl);
+        assert!(!remote.capabilities.start);
+        assert!(!remote.capabilities.close);
+        assert!(!remote.capabilities.kill);
+
+        let json = serde_json::to_value(remote).unwrap();
+        assert_eq!(json["kind"], "remote");
+        assert!(json.get("path").is_none());
+        assert!(json.get("exe").is_none());
+        assert_eq!(json["capabilities"]["repl"], true);
+        assert_eq!(json["capabilities"]["start"], false);
+
+        assert!(state
+            .reserve_start(game("C:/Games/another"))
+            .unwrap_err()
+            .starts_with("REMOTE_CLIENT_ACTIVE:"));
+
+        state.agent_disconnected();
+        assert!(state
+            .statuses(Vec::new())
+            .iter()
+            .all(|status| status.kind != ClientKind::Remote));
+        assert!(matches!(
+            state.reserve_start(game("C:/Games/another")),
+            Ok(StartDecision::Reserved)
+        ));
+    }
+
+    #[test]
+    fn remote_agent_cannot_be_closed_or_killed_as_a_local_process() {
+        let manager = ClientManager::default();
+        manager.inner.lock().unwrap().remote = Some(RemoteClient {
+            agent_version: Some("0.4.1".into()),
+            agent_pid: Some(4242),
+            agent_status: AgentStatus::Ready,
+        });
+
+        assert!(manager
+            .close(Duration::ZERO)
+            .unwrap_err()
+            .starts_with("REMOTE_CLIENT_UNMANAGED:"));
+        assert!(manager
+            .kill()
+            .unwrap_err()
+            .starts_with("REMOTE_CLIENT_UNMANAGED:"));
     }
 
     #[test]
     fn disconnect_clears_the_transport() {
-        let manager = ClientManager::default();
         let dir = std::env::temp_dir().join(format!("wms_client_manager_{}", uuid::Uuid::new_v4()));
+        let manager = ClientManager::with_config_path(dir.join("agent-network.json"));
 
-        manager.connect(dir.clone(), Arc::new(|_| {})).unwrap();
-        assert_eq!(
-            manager.request(InFrame::Hello).unwrap_err(),
-            "control frames cannot be requested"
-        );
+        manager.connect(false, true, Arc::new(|_| {})).unwrap();
         manager.disconnect().unwrap();
         assert_eq!(
             manager

@@ -1,6 +1,5 @@
 //! Tauri command surface: the only desktop<->backend boundary.
 
-use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -11,7 +10,7 @@ use crate::install::{self, GameInfo};
 use crate::mcp::{self, ConnectionInfo, McpCliStatus};
 use crate::protocol::{InFrame, OutFrame, ServerEvent};
 use crate::session::{AppState, ClientStatus, CloseResult};
-use crate::transport::EventSink;
+use crate::transport::{AgentConnectionInfo, EventSink};
 
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
@@ -86,10 +85,8 @@ pub async fn mcp_remove_from_claude(state: State<'_, AppState>) -> Result<String
 }
 
 #[tauri::command]
-pub fn default_buffer_dir() -> String {
-    install::default_buffer_dir_path()
-        .to_string_lossy()
-        .into_owned()
+pub fn agent_connection_info(state: State<'_, AppState>) -> Result<AgentConnectionInfo, String> {
+    state.client.connection_info()
 }
 
 // --- Automated setup (PJOrion-style) ------------------------------------------
@@ -106,8 +103,12 @@ pub fn inspect_game_dir(dir: String) -> Option<GameInfo> {
 }
 
 #[tauri::command]
-pub fn install_agent(game_dir: String, mods_version: String) -> Result<String, String> {
-    install::install_agent(&game_dir, &mods_version)
+pub fn install_agent(
+    state: State<'_, AppState>,
+    game_dir: String,
+    mods_version: String,
+) -> Result<(), String> {
+    state.client.install_agent(&game_dir, &mods_version)
 }
 
 #[tauri::command]
@@ -166,14 +167,14 @@ pub fn kill_client(state: State<'_, AppState>) -> Result<ClientStatus, String> {
 #[tauri::command]
 pub fn connect(
     state: State<'_, AppState>,
-    buffer_dir: String,
+    lan_enabled: bool,
+    secure_enabled: bool,
     on_event: Channel<ServerEvent>,
 ) -> Result<(), String> {
-    let dir = PathBuf::from(&buffer_dir);
     let sink: EventSink = Arc::new(move |event| {
         let _ = on_event.send(event);
     });
-    state.client.connect(dir, sink)
+    state.client.connect(lan_enabled, secure_enabled, sink)
 }
 
 #[tauri::command]

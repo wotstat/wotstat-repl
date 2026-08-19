@@ -1,7 +1,7 @@
 """Agent loop: drain captured output to frames, poll inbound requests, dispatch.
 
-A single daemon thread owns all file I/O. The game thread only ever appends to a
-deque (via Capture), so it is never blocked by the channel.
+A single daemon thread owns all network I/O. The game thread only ever appends
+to a deque (via Capture), so it is never blocked by the channel.
 """
 
 import os
@@ -10,7 +10,7 @@ import threading
 import collections
 
 from . import __version__
-from .framebus import FrameBus
+from .socketbus import SocketBus
 from .capture import Capture
 from .runner import run_on_main
 from .handlers import DISPATCH, MAIN_THREAD_OPS, seed_namespace
@@ -19,12 +19,13 @@ _state = {'agent': None, 'running': False}
 
 
 class _Agent(object):
-    def __init__(self, buffer_dir, interval):
-        self._bus = FrameBus(buffer_dir)
+    def __init__(self, config_dir, interval):
+        self._bus = SocketBus(config_dir, __version__, os.getpid())
         self._interval = interval
         self._queue = collections.deque()
         self._capture = Capture(self._queue.append)
         self._running = False
+        self._thread = None
 
     def start(self):
         self._capture.install()
@@ -36,17 +37,20 @@ class _Agent(object):
         thread = threading.Thread(target=self._run)
         thread.setDaemon(True)
         thread.start()
-        # Handshake so the desktop knows the in-game agent is actually alive.
-        self._bus.send({'type': 'hello', 'version': __version__, 'pid': os.getpid()})
+        self._thread = thread
 
     def stop(self):
         if not self._running:
             return
         self._running = False
+        if self._thread is not None and threading.current_thread() is not self._thread:
+            self._thread.join(0.25)
         try:
             self._capture.uninstall()
         finally:
+            self._flush_output()
             self._bus.send({'type': 'disconnected'})
+            self._bus.close(0.2)
 
     def _flush_output(self):
         pending = len(self._queue)
@@ -93,22 +97,22 @@ class _Agent(object):
         while self._running:
             try:
                 self._flush_output()
-                for req in self._bus.drain():
+                for req in self._bus.poll():
                     self._dispatch(req)
             except Exception:
                 pass
             time.sleep(self._interval)
 
 
-def start(buffer_dir, interval=0.05):
+def start(config_dir, interval=0.05):
     if _state['running']:
         return
     try:
-        if not os.path.isdir(buffer_dir):
-            os.makedirs(buffer_dir)
+        if not os.path.isdir(config_dir):
+            os.makedirs(config_dir)
     except OSError:
         pass
-    agent = _Agent(buffer_dir, interval)
+    agent = _Agent(config_dir, interval)
     agent.start()
     _state['agent'] = agent
     _state['running'] = True

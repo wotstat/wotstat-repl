@@ -543,7 +543,7 @@ impl WotMcpServer {
 impl WotMcpServer {
     #[rmcp::tool(
         name = "wot_list_clients",
-        description = "List all detected World of Tanks installations and their process and agent statuses.",
+        description = "List local World of Tanks installations and any currently connected remote game. Check kind and capabilities before acting: remote clients omit path/exe and support REPL and logs only.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -590,7 +590,7 @@ impl WotMcpServer {
 
     #[rmcp::tool(
         name = "wot_start_client",
-        description = "Install and connect the agent if needed, then start the selected World of Tanks client. Starting the already active client is a no-op.",
+        description = "Install and connect the agent if needed, then start a local World of Tanks client by path. Remote clients cannot be started. Starting the already active local client is a no-op.",
         annotations(
             read_only_hint = false,
             destructive_hint = false,
@@ -616,7 +616,7 @@ impl WotMcpServer {
 
     #[rmcp::tool(
         name = "wot_close_client",
-        description = "Request a graceful close of the active World of Tanks client and wait for it to stop. This never force-kills the process.",
+        description = "Request a graceful close of the active local World of Tanks client and wait for it to stop. Remote clients cannot be closed. This never force-kills the process.",
         annotations(
             read_only_hint = false,
             destructive_hint = true,
@@ -646,7 +646,7 @@ impl WotMcpServer {
 
     #[rmcp::tool(
         name = "wot_exec",
-        description = "Execute arbitrary Python code in the active World of Tanks client on its main thread. The code can mutate game state and interact with external systems.",
+        description = "Execute arbitrary Python code in the connected local or remote World of Tanks client on its main thread. The code can mutate game state and interact with external systems.",
         annotations(
             read_only_hint = false,
             destructive_hint = true,
@@ -707,7 +707,7 @@ impl WotMcpServer {
 
     #[rmcp::tool(
         name = "wot_kill_client",
-        description = "Forcefully terminate the active World of Tanks client after verifying the saved process identity.",
+        description = "Forcefully terminate the active local World of Tanks client after verifying the saved process identity. Remote clients cannot be killed.",
         annotations(
             read_only_hint = false,
             destructive_hint = true,
@@ -745,11 +745,11 @@ impl ServerHandler for WotMcpServer {
             Implementation::new("wotstat-repl", env!("CARGO_PKG_VERSION"))
                 .with_title("WotStat World of Tanks REPL")
                 .with_description(
-                    "A development MCP server for controlling a local World of Tanks client and executing Python 2.7 code inside the running game.",
+                    "A development MCP server for controlling local World of Tanks clients and executing Python 2.7 code in a connected local or remote game.",
                 ),
         )
         .with_instructions(
-            "WoT means World of Tanks, not Web of Things. Start with wot_list_clients. Only one client can be active. Use wot_close_client for graceful shutdown; use wot_kill_client only if the client is unresponsive. wot_exec runs arbitrary Python 2.7 inside the game process.",
+            "WoT means World of Tanks, not Web of Things. Start with wot_list_clients and inspect each client's kind and capabilities. Only one agent can be active. A remote client supports wot_exec and wot_read_log but cannot be started, closed, or killed; it intentionally has no local path or executable. For a local client, use wot_close_client for graceful shutdown and wot_kill_client only if it is unresponsive. wot_exec runs arbitrary Python 2.7 inside the game process.",
         )
     }
 }
@@ -944,9 +944,11 @@ mod tests {
         let instructions = initialized_body["result"]["instructions"].as_str().unwrap();
         assert!(instructions.contains("not Web of Things"));
         assert!(instructions.contains("wot_list_clients"));
-        assert!(instructions.contains("Only one client"));
+        assert!(instructions.contains("Only one agent"));
+        assert!(instructions.contains("remote client supports wot_exec and wot_read_log"));
+        assert!(instructions.contains("cannot be started, closed, or killed"));
         assert!(instructions.contains("wot_close_client for graceful shutdown"));
-        assert!(instructions.contains("wot_kill_client only if the client is unresponsive"));
+        assert!(instructions.contains("wot_kill_client only if it is unresponsive"));
         let session_id = initialized.header("mcp-session-id").unwrap();
 
         let notification = http_post(

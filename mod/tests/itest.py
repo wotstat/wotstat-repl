@@ -1,83 +1,183 @@
-"""Integration test: drive the real agent loop like the desktop would.
+"""Network integration test for the real agent loop (Python 2.7 or 3.x).
 
-Exercises the daemon poll thread, main-thread dispatch (inline without BigWorld),
-stdout capture, shutdown frames, and namespace persistence across requests. Runs
-on py2.7 or 3.x.
+Starts the game-side agent before the fake desktop begins listening, verifies
+that startup output is retained in RAM, authenticates the TCP session, executes
+two correlated requests, and observes a clean disconnect.
 """
 
+import json
 import os
-import sys
-import time
 import shutil
+import socket
+import sys
 import tempfile
+import time
 
 sys.path.insert(0, os.path.abspath(os.path.join(
     os.path.dirname(__file__), '..', 'res', 'scripts', 'common')))
 
-from wms_agent.framebus import FrameBus
 import wms_agent
+from wms_agent.socketbus import PROTOCOL_VERSION, _proof
+
+
+TOKEN = '00000000-0000-4000-8000-000000000001'
+
+
+def send_frame(sock, frame):
+    body = json.dumps(frame, separators=(',', ':')) + '\n'
+    if not isinstance(body, bytes):
+        body = body.encode('utf-8')
+    sock.sendall(body)
+
+
+def receive_frame(sock, received, deadline):
+    while time.time() < deadline:
+        if b'\n' in received[0]:
+            raw, received[0] = received[0].split(b'\n', 1)
+            if not isinstance(raw, str):
+                raw = raw.decode('utf-8')
+            return json.loads(raw)
+        try:
+            chunk = sock.recv(16384)
+        except socket.timeout:
+            continue
+        if not chunk:
+            return None
+        received[0] += chunk
+    return None
+
+
+def authenticate(client, received, server_id, deadline):
+    hello = receive_frame(client, received, deadline)
+    assert hello and hello.get('type') == 'hello', hello
+    assert hello.get('proof') == _proof(TOKEN, [
+        'hello', PROTOCOL_VERSION, hello['agent_id'], hello['session'],
+        hello['nonce'],
+    ]), hello
+    send_frame(client, {
+        'type': 'welcome',
+        'protocol': PROTOCOL_VERSION,
+        'agent_id': hello['agent_id'],
+        'session': hello['session'],
+        'nonce': hello['nonce'],
+        'server_id': server_id,
+        'proof': _proof(TOKEN, [
+            'welcome', PROTOCOL_VERSION, hello['agent_id'], hello['session'],
+            hello['nonce'], server_id,
+        ]),
+    })
+    return hello
 
 
 def main():
-    work = tempfile.mkdtemp(prefix="wms_itest_")
-    desktop = FrameBus(work, out_name="d2c", in_name="c2d")
+    work = tempfile.mkdtemp(prefix='wms_network_itest_')
+    listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    client = None
     try:
-        wms_agent.start(work, interval=0.02)
+        listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        listener.bind(('127.0.0.1', 0))
+        port = listener.getsockname()[1]
+        with open(os.path.join(work, 'agent-network.json'), 'w') as handle:
+            json.dump({
+                'token': TOKEN,
+                'host': '127.0.0.1',
+                'tcp_port': port,
+                'discovery_port': port,
+            }, handle)
 
-        desktop.send({"id": "1", "type": "exec", "code": "print('hello'); x = 40 + 2"})
-        desktop.send({"id": "2", "type": "exec", "code": "x * 2"})
+        # Game first: the initial connection is refused, but captured output
+        # remains in the agent's bounded RAM backlog.
+        wms_agent.start(work, interval=0.01)
+        print('early-startup-line')
+        time.sleep(0.08)
+
+        listener.listen(1)
+        listener.settimeout(4.0)
+        client, _peer = listener.accept()
+        client.settimeout(0.2)
+        received = [b'']
+        deadline = time.time() + 4.0
+        server_id = 'desktop-test'
+        hello = authenticate(client, received, server_id, deadline)
+
+        # Drop the desktop before acknowledging the startup frame. The same
+        # session/sequence must be replayed after the agent reconnects.
+        early = receive_frame(client, received, deadline)
+        assert early and early.get('type') == 'stdout', early
+        assert 'early-startup-line' in early.get('text', ''), early
+        early_seq = early['seq']
+        client.close()
+        client = None
+
+        client, _peer = listener.accept()
+        client.settimeout(0.2)
+        received = [b'']
+        reconnect_deadline = time.time() + 4.0
+        rehello = authenticate(client, received, server_id, reconnect_deadline)
+        assert rehello['session'] == hello['session'], (hello, rehello)
+        replayed = receive_frame(client, received, reconnect_deadline)
+        assert replayed and replayed.get('seq') == early_seq, replayed
+        assert 'early-startup-line' in replayed.get('text', ''), replayed
+        send_frame(client, {
+            'type': 'ack', 'session': hello['session'], 'seq': early_seq,
+        })
+
+        send_frame(client, {'id': '1', 'type': 'exec',
+                            'code': "print('hello'); x = 40 + 2"})
+        send_frame(client, {'id': '2', 'type': 'exec', 'code': 'x * 2'})
 
         results = {}
-        stdout_text = ""
-        hello = None
-        deadline = time.time() + 3.0
+        stdout_text = replayed.get('text', '')
+        deadline = time.time() + 4.0
         while time.time() < deadline and not (
-                "2" in results and "hello" in stdout_text and hello):
-            for frame in desktop.drain():
-                if frame.get("type") == "stdout":
-                    stdout_text += frame.get("text", "")
-                elif frame.get("type") == "hello":
-                    hello = frame
-                elif frame.get("id"):
-                    results[frame["id"]] = frame
-            time.sleep(0.02)
+                results.get('2', {}).get('repr') == '84'
+                and 'early-startup-line' in stdout_text
+                and 'hello' in stdout_text):
+            frame = receive_frame(client, received, deadline)
+            if frame is None:
+                break
+            if frame.get('type') == 'pong':
+                continue
+            seq = frame.get('seq')
+            assert frame.get('session') == hello['session'], frame
+            assert isinstance(seq, int), frame
+            send_frame(client, {
+                'type': 'ack', 'session': hello['session'], 'seq': seq,
+            })
+            if frame.get('type') == 'stdout':
+                stdout_text += frame.get('text', '')
+            elif frame.get('id'):
+                results[frame['id']] = frame
 
-        desktop.send({"type": "hello"})
-        rehello = None
-        rehello_deadline = time.time() + 1.0
-        while time.time() < rehello_deadline and rehello is None:
-            for frame in desktop.drain():
-                if frame.get("type") == "hello":
-                    rehello = frame
-                    break
-            time.sleep(0.02)
+        assert results.get('2', {}).get('repr') == '84', results
+        assert 'early-startup-line' in stdout_text, repr(stdout_text)
+        assert 'hello' in stdout_text, repr(stdout_text)
 
-        assert rehello is not None, "agent should repeat hello for a reconnecting desktop"
-
-        wms_agent.stop()  # restores stdout before we assert/print
+        wms_agent.stop()
         disconnected = False
-        disconnected_deadline = time.time() + 1.0
-        while time.time() < disconnected_deadline and not disconnected:
-            disconnected = any(
-                frame.get("type") == "disconnected"
-                for frame in desktop.drain())
-            time.sleep(0.02)
+        disconnect_deadline = time.time() + 1.0
+        while time.time() < disconnect_deadline:
+            frame = receive_frame(client, received, disconnect_deadline)
+            if frame is None:
+                break
+            if frame.get('type') == 'disconnected':
+                disconnected = True
+                break
+        assert disconnected, 'agent should send disconnected before closing TCP'
 
-        assert results.get("2", {}).get("repr") == "84", results
-        assert "hello" in stdout_text, repr(stdout_text)
-        assert hello.get("version") == wms_agent.__version__, hello
-        assert disconnected, "agent should send disconnected on stop"
-
-        print("ITEST OK  ns-persist x*2=%s  captured=%r"
-              % (results["2"]["repr"], stdout_text.strip()))
+        print("ITEST OK  late-ui backlog=%r  ns-persist x*2=%s" % (
+            'early-startup-line', results['2']['repr']))
         return 0
     finally:
         try:
             wms_agent.stop()
         except Exception:
             pass
+        if client is not None:
+            client.close()
+        listener.close()
         shutil.rmtree(work, ignore_errors=True)
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     sys.exit(main())

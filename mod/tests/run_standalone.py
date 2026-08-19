@@ -1,6 +1,6 @@
 """Run the agent standalone, simulating the game's embedded py2.7 (no BigWorld).
 
-    python run_standalone.py <buffer_dir>
+    python run_standalone.py <config_dir>
 
 Used by the Rust transport integration test and for manual loopback testing
 without launching the client.

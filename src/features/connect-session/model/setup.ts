@@ -50,12 +50,12 @@ export async function setupAndConnect(game: GameInfo, launch: boolean, replay?: 
   try {
     saveState(LAST_GAME_KEY, game)
     consoleBus.system(`installing agent into ${game.path} (mods/${game.modsVersion})\n`)
-    const buffer = await api.installAgent(game.path, game.modsVersion)
+    await api.installAgent(game.path, game.modsVersion)
     consoleBus.system('agent installed\n')
     if (launch) {
       consoleBus.system(`launching ${replay ?? game.exe}\n`)
     }
-    const connection = connect(buffer)
+    const connection = connect()
     if (launch) {
       try {
         await api.launchGame(game.path, game.exe, replay)

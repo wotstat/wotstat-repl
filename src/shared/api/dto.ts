@@ -38,6 +38,13 @@ export interface McpConnectionInfo {
   error: string | null
 }
 
+export interface AgentConnectionInfo {
+  localAddress: string
+  networkAddress: string
+  configPath: string
+  clientConfig: string
+}
+
 export interface McpCliState {
   installed: boolean
   configured: boolean
@@ -50,11 +57,10 @@ export interface McpCliStatus {
 
 export type ServerEvent =
   | { kind: 'log'; lines: LogLine[] }
-  | { kind: 'hello'; version?: string | null; pid?: number | null }
+  | { kind: 'hello'; version?: string | null; pid?: number | null; remote: boolean }
   | { kind: 'disconnected' }
 
 export type OutFrame =
-  | { type: 'hello'; version?: string | null; pid?: number | null }
   | { type: 'stdout'; stream: string; level?: string | null; text: string }
   | {
       type: 'result'

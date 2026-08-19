@@ -9,7 +9,8 @@ permissions:
   contents: write
 
 jobs:
-  release:
+  build-mod:
+    name: Build game mod
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -18,21 +19,178 @@ jobs:
         shell: pwsh
         run: choco install python2 --version=2.7.18 -y --no-progress
 
+      - name: Test and build game mod
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $python = 'C:\Python27\python.exe'
+          foreach ($test in @('test_exec.py', 'selftest.py', 'itest.py', 'test_complete.py')) {
+            & $python "mod/tests/$test"
+            if ($LASTEXITCODE -ne 0) { throw "Agent test failed: $test" }
+          }
+
+          $embedded = 'src-tauri/resources/wotstat.repl.mod'
+          & $python mod/build.py --version $env:GITHUB_REF_NAME --out $embedded
+          if ($LASTEXITCODE -ne 0) { throw 'Game mod build failed' }
+
+          New-Item release-assets -ItemType Directory -Force | Out-Null
+          Copy-Item $embedded "release-assets/wotstat.repl_$env:GITHUB_REF_NAME.wotmod"
+
+      - name: Upload embedded mod
+        uses: actions/upload-artifact@v4
+        with:
+          name: embedded-agent-mod
+          path: src-tauri/resources/wotstat.repl.mod
+          if-no-files-found: error
+
+      - name: Upload standalone mod
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-mod
+          path: release-assets/*.wotmod
+          if-no-files-found: error
+
+  build-desktop:
+    name: Build ${{ matrix.name }}
+    needs: build-mod
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Windows x64
+            platform: windows
+            os: windows-latest
+          - name: Linux x64
+            platform: linux
+            os: ubuntu-22.04
+          - name: macOS universal
+            platform: macos
+            os: macos-latest
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download embedded mod
+        uses: actions/download-artifact@v4
+        with:
+          name: embedded-agent-mod
+          path: src-tauri/resources
+
+      - name: Install Linux system dependencies
+        if: matrix.platform == 'linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            build-essential \
+            curl \
+            wget \
+            file \
+            libxdo-dev \
+            libssl-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            xdg-utils
+
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.3.14
 
       - uses: dtolnay/rust-toolchain@stable
 
+      - name: Install macOS universal Rust targets
+        if: matrix.platform == 'macos'
+        run: rustup target add aarch64-apple-darwin x86_64-apple-darwin
+
       - uses: swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
+          key: ${{ matrix.platform }}
 
       - run: bun install --frozen-lockfile
 
-      - name: Test and build Windows release
+      - name: Test desktop backend
+        run: cargo test --manifest-path src-tauri/Cargo.toml --all-targets
+
+      - name: Check frontend architecture
+        run: bun run lint:fsd
+
+      - name: Write release version config
+        if: matrix.platform != 'windows'
+        shell: bash
+        run: printf '{"version":"%s"}\n' "$GITHUB_REF_NAME" > "$RUNNER_TEMP/tauri-version.json"
+
+      - name: Write release version config
+        if: matrix.platform == 'windows'
         shell: pwsh
-        run: ./build-windows.ps1 -Version $env:GITHUB_REF_NAME
+        run: |
+          @{ version = $env:GITHUB_REF_NAME } | ConvertTo-Json -Compress |
+            Set-Content "$env:RUNNER_TEMP/tauri-version.json" -Encoding ASCII
+
+      - name: Build Windows bundles
+        if: matrix.platform == 'windows'
+        shell: pwsh
+        run: bun run tauri build --ci --config "$env:RUNNER_TEMP/tauri-version.json" --bundles nsis --no-sign
+
+      - name: Build Linux bundles
+        if: matrix.platform == 'linux'
+        shell: bash
+        run: bun run tauri build --ci --config "$RUNNER_TEMP/tauri-version.json" --bundles deb,appimage --no-sign
+
+      - name: Build universal macOS bundle
+        if: matrix.platform == 'macos'
+        shell: bash
+        env:
+          APPLE_SIGNING_IDENTITY: '-'
+        run: bun run tauri build --ci --config "$RUNNER_TEMP/tauri-version.json" --target universal-apple-darwin --bundles dmg
+
+      - name: Collect Windows release files
+        if: matrix.platform == 'windows'
+        shell: pwsh
+        run: |
+          New-Item release-assets -ItemType Directory -Force | Out-Null
+          Copy-Item src-tauri/target/release/wotstat-repl.exe release-assets/wotstat-repl.exe
+          Copy-Item src-tauri/target/release/bundle/nsis/*.exe release-assets/
+
+      - name: Collect Linux release files
+        if: matrix.platform == 'linux'
+        shell: bash
+        run: |
+          mkdir -p release-assets
+          cp src-tauri/target/release/bundle/deb/*.deb release-assets/
+          cp src-tauri/target/release/bundle/appimage/*.AppImage release-assets/
+
+      - name: Collect macOS release files
+        if: matrix.platform == 'macos'
+        shell: bash
+        run: |
+          mkdir -p release-assets
+          cp src-tauri/target/universal-apple-darwin/release/bundle/dmg/*.dmg release-assets/
+
+      - name: Upload desktop release files
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ matrix.platform }}
+          path: release-assets/*
+          if-no-files-found: error
+
+  release:
+    name: Create draft release
+    needs:
+      - build-mod
+      - build-desktop
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download release files
+        uses: actions/download-artifact@v4
+        with:
+          pattern: release-*
+          path: release-assets
+          merge-multiple: true
+
+      - name: List release files
+        run: find release-assets -maxdepth 1 -type f -printf '%f\n' | sort
 
       - uses: softprops/action-gh-release@v3
         env:
@@ -41,13 +199,14 @@ jobs:
           tag_name: ${{ github.ref_name }}
           name: WotStat REPL ${{ github.ref_name }}
           body: |
-            Windows downloads:
+            Desktop downloads:
 
-            - `wotstat-repl.exe` runs directly without installation. On a standard Windows 10/11 system, this is all you need.
-            - `wotstat-repl_${{ github.ref_name }}_x64-setup.exe` installs the app and ensures that the WebView2 runtime is available.
+            - Windows: `wotstat-repl.exe` (portable) or the `_x64-setup.exe` installer.
+            - macOS: the `_universal.dmg` image for Apple Silicon and Intel Macs.
+            - Linux x64: `.AppImage` or `.deb`.
+
+            The standalone `wotstat.repl_${{ github.ref_name }}.wotmod` is for manual game installation. The same mod is embedded in every desktop build and is installed automatically when the game is available locally.
           draft: true
           prerelease: false
           fail_on_unmatched_files: true
-          files: |
-            src-tauri/target/release/wotstat-repl.exe
-            src-tauri/target/release/bundle/nsis/wotstat-repl_${{ github.ref_name }}_x64-setup.exe
+          files: release-assets/*

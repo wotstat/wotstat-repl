@@ -41,7 +41,7 @@ pub fn run() {
             commands::mcp_add_to_claude,
             commands::mcp_remove_from_codex,
             commands::mcp_remove_from_claude,
-            commands::default_buffer_dir,
+            commands::agent_connection_info,
             commands::detect_games,
             commands::inspect_game_dir,
             commands::install_agent,

@@ -36,14 +36,23 @@ pub struct GameInfo {
 }
 
 pub(crate) fn app_data_root() -> PathBuf {
+    #[cfg(windows)]
     let base = std::env::var("LOCALAPPDATA")
         .or_else(|_| std::env::var("APPDATA"))
-        .unwrap_or_else(|_| ".".to_string());
-    PathBuf::from(base).join("WotStatWoTREPL")
-}
-
-pub fn default_buffer_dir_path() -> PathBuf {
-    app_data_root().join("buffer")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| PathBuf::from("."));
+    #[cfg(target_os = "macos")]
+    let base = std::env::var("HOME")
+        .map(|home| PathBuf::from(home).join("Library/Application Support"))
+        .unwrap_or_else(|_| PathBuf::from("."));
+    #[cfg(all(unix, not(target_os = "macos")))]
+    let base = std::env::var("XDG_DATA_HOME")
+        .map(PathBuf::from)
+        .or_else(|_| std::env::var("HOME").map(|home| PathBuf::from(home).join(".local/share")))
+        .unwrap_or_else(|_| PathBuf::from("."));
+    #[cfg(not(any(windows, unix)))]
+    let base = PathBuf::from(".");
+    base.join("WotStatWoTREPL")
 }
 
 pub fn detect_games() -> Vec<GameInfo> {
@@ -199,7 +208,11 @@ fn pick_mods_version(dir: &Path, version: &str) -> String {
     candidates.pop().unwrap_or_else(|| version.to_string())
 }
 
-pub fn install_agent(game_dir: &str, mods_version: &str) -> Result<String, String> {
+pub fn install_agent(
+    game_dir: &str,
+    mods_version: &str,
+    agent_config: &[u8],
+) -> Result<(), String> {
     if mods_version.trim().is_empty() {
         return Err("missing mods version".into());
     }
@@ -218,9 +231,10 @@ pub fn install_agent(game_dir: &str, mods_version: &str) -> Result<String, Strin
         }
     }
     fs::write(mods_dir.join(mod_name), AGENT_MOD).map_err(|e| e.to_string())?;
-    let buffer = default_buffer_dir_path();
-    fs::create_dir_all(&buffer).map_err(|e| e.to_string())?;
-    Ok(buffer.to_string_lossy().into_owned())
+    let config_dir = game_dir.join("mods").join("configs").join("wotstat-repl");
+    fs::create_dir_all(&config_dir).map_err(|e| e.to_string())?;
+    fs::write(config_dir.join("agent-network.json"), agent_config).map_err(|e| e.to_string())?;
+    Ok(())
 }
 
 fn replay_extension(exe: &str) -> &'static str {
@@ -260,7 +274,7 @@ pub fn launch_game(game_dir: &str, exe: &str, replay: Option<&str>) -> Result<u3
 
 #[cfg(test)]
 mod tests {
-    use super::{mod_name_for_exe, replay_extension, MTMOD_NAME, WOTMOD_NAME};
+    use super::{install_agent, mod_name_for_exe, replay_extension, MTMOD_NAME, WOTMOD_NAME};
 
     #[test]
     fn picks_the_game_mod_extension() {
@@ -274,5 +288,22 @@ mod tests {
     fn picks_the_game_replay_extension() {
         assert_eq!(replay_extension("Tanki.exe"), "mtreplay");
         assert_eq!(replay_extension("WorldOfTanks.exe"), "wotreplay");
+    }
+
+    #[test]
+    fn installation_places_network_config_where_proton_can_see_it() {
+        let root = std::env::temp_dir().join(format!("wms_install_{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("Tanki.exe"), b"").unwrap();
+        let config = br#"{"token":"test"}"#;
+
+        install_agent(root.to_str().unwrap(), "1.0", config).unwrap();
+
+        assert!(root.join("mods/1.0").join(MTMOD_NAME).is_file());
+        assert_eq!(
+            std::fs::read(root.join("mods/configs/wotstat-repl/agent-network.json")).unwrap(),
+            config
+        );
+        let _ = std::fs::remove_dir_all(root);
     }
 }
