@@ -44,6 +44,7 @@ jobs:
 
           New-Item release-assets -ItemType Directory -Force | Out-Null
           Copy-Item $embedded "release-assets/wotstat.repl_$env:GITHUB_REF_NAME.wotmod"
+          Copy-Item $embedded "release-assets/wotstat.repl_$env:GITHUB_REF_NAME.mtmod"
 
       - name: Upload embedded mod
         uses: actions/upload-artifact@v4
@@ -52,11 +53,13 @@ jobs:
           path: src-tauri/resources/wotstat.repl.mod
           if-no-files-found: error
 
-      - name: Upload universal mod
+      - name: Upload game mods
         uses: actions/upload-artifact@v4
         with:
           name: release-mod
-          path: release-assets/*.wotmod
+          path: |
+            release-assets/*.wotmod
+            release-assets/*.mtmod
           if-no-files-found: error
 
   build-desktop:
@@ -163,23 +166,35 @@ jobs:
         shell: pwsh
         run: |
           New-Item release-assets -ItemType Directory -Force | Out-Null
-          Copy-Item src-tauri/target/release/wotstat-repl.exe release-assets/wotstat-repl.exe
-          Copy-Item src-tauri/target/release/bundle/nsis/*.exe release-assets/
+          $installers = @(Get-ChildItem src-tauri/target/release/bundle/nsis/*.exe)
+          if ($installers.Count -ne 1) {
+            throw "Expected exactly one Windows installer, found $($installers.Count)"
+          }
+          Copy-Item src-tauri/target/release/wotstat-repl.exe "release-assets/wotstat-repl_${env:GITHUB_REF_NAME}.exe"
+          Copy-Item $installers[0] "release-assets/wotstat-repl_${env:GITHUB_REF_NAME}_win64-setup.exe"
 
       - name: Collect Linux release files
         if: matrix.platform == 'linux'
         shell: bash
         run: |
           mkdir -p release-assets
-          cp src-tauri/target/release/bundle/deb/*.deb release-assets/
-          cp src-tauri/target/release/bundle/appimage/*.AppImage release-assets/
+          shopt -s nullglob
+          debs=(src-tauri/target/release/bundle/deb/*.deb)
+          appimages=(src-tauri/target/release/bundle/appimage/*.AppImage)
+          [[ ${#debs[@]} -eq 1 ]] || { echo "Expected exactly one Debian package, found ${#debs[@]}" >&2; exit 1; }
+          [[ ${#appimages[@]} -eq 1 ]] || { echo "Expected exactly one AppImage, found ${#appimages[@]}" >&2; exit 1; }
+          cp "${debs[0]}" "release-assets/wotstat-repl_${GITHUB_REF_NAME}_linux.deb"
+          cp "${appimages[0]}" "release-assets/wotstat-repl_${GITHUB_REF_NAME}_linux.AppImage"
 
       - name: Collect macOS release files
         if: matrix.platform == 'macos'
         shell: bash
         run: |
           mkdir -p release-assets
-          cp src-tauri/target/universal-apple-darwin/release/bundle/dmg/*.dmg release-assets/
+          shopt -s nullglob
+          dmgs=(src-tauri/target/universal-apple-darwin/release/bundle/dmg/*.dmg)
+          [[ ${#dmgs[@]} -eq 1 ]] || { echo "Expected exactly one macOS image, found ${#dmgs[@]}" >&2; exit 1; }
+          cp "${dmgs[0]}" "release-assets/wotstat-repl_${GITHUB_REF_NAME}_macos.dmg"
 
       - name: Upload desktop release files
         uses: actions/upload-artifact@v4
@@ -214,13 +229,16 @@ jobs:
           body: |
             Desktop downloads:
 
-            - Windows: `wotstat-repl.exe` (portable) or the `_x64-setup.exe` installer.
-            - macOS: the `_universal.dmg` image for Apple Silicon and Intel Macs.
-            - Linux x64: `.AppImage` or `.deb`.
+            - Windows: `wotstat-repl_${{ github.ref_name }}.exe` (portable) or `wotstat-repl_${{ github.ref_name }}_win64-setup.exe` (installer).
+            - macOS: `wotstat-repl_${{ github.ref_name }}_macos.dmg` for Apple Silicon and Intel Macs.
+            - Linux x64: `wotstat-repl_${{ github.ref_name }}_linux.AppImage` or `wotstat-repl_${{ github.ref_name }}_linux.deb`.
 
             Game mods:
 
-            - `wotstat.repl_${{ github.ref_name }}.wotmod` is the universal game agent. It connects to the desktop application over TCP and simultaneously hosts a standalone REPL UI at `http://127.0.0.1:8768/`. The same mod is embedded in every desktop build.
+            - `wotstat.repl_${{ github.ref_name }}.wotmod` for World of Tanks.
+            - `wotstat.repl_${{ github.ref_name }}.mtmod` for Mir Tankov.
+
+            Both files contain the same universal game agent. It connects to the desktop application over TCP and simultaneously hosts a standalone REPL UI at `http://127.0.0.1:8768/`. The same mod is embedded in every desktop build.
           draft: true
           prerelease: false
           fail_on_unmatched_files: true

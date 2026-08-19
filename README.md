@@ -22,14 +22,17 @@ A desktop application for developing mods for **World of Tanks** and **Mir Tanko
 The [latest release](https://github.com/wotstat/wotstat-repl/releases/latest)
 provides desktop builds and the game mod:
 
-- Windows x64: portable `wotstat-repl.exe` and the
-  `wotstat-repl_<version>_x64-setup.exe` installer.
-- macOS: a universal `.dmg` for Apple Silicon and Intel Macs.
-- Linux x64: `.AppImage` and `.deb` packages.
-- `wotstat.repl_<version>.wotmod`, the universal game agent with both desktop
-  TCP connectivity and a standalone browser REPL.
+- Windows x64: portable `wotstat-repl_<version>.exe` and the
+  `wotstat-repl_<version>_win64-setup.exe` installer.
+- macOS: `wotstat-repl_<version>_macos.dmg`, a universal image for Apple
+  Silicon and Intel Macs.
+- Linux x64: `wotstat-repl_<version>_linux.AppImage` and
+  `wotstat-repl_<version>_linux.deb` packages.
+- `wotstat.repl_<version>.wotmod` for World of Tanks and
+  `wotstat.repl_<version>.mtmod` for Mir Tankov. Both contain the same universal
+  game agent with desktop TCP connectivity and a standalone browser REPL.
 
-The same `.wotmod` is embedded in every desktop build. When the application can
+The same universal agent is embedded in every desktop build. When the application can
 access a local game installation, it installs the embedded copy automatically;
 the versioned release file is intended for a game on another machine or a manual
 installation. macOS and Linux builds can connect to a remote/Proton game, but
@@ -49,7 +52,9 @@ a newer build replace the previous agent instead of leaving duplicate mods.
 
 ### Web REPL without the desktop application
 
-1. Install `wotstat.repl_<version>.wotmod` into the client's `mods/<version>` directory.
+1. Install `wotstat.repl_<version>.wotmod` for World of Tanks or
+   `wotstat.repl_<version>.mtmod` for Mir Tankov into the client's
+   `mods/<version>` directory.
 2. Start the game.
 3. Open [http://127.0.0.1:8768/](http://127.0.0.1:8768/) in a browser on the same machine.
 
