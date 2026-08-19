@@ -44,7 +44,7 @@ class _Agent(object):
         self._capture.install()
         web_error = getattr(self._bus, 'web_error', None)
         if web_error:
-            print 'WotStat REPL: web UI unavailable: %s' % web_error
+            print('WotStat REPL: web UI unavailable: %s' % web_error)
         # Seed inline, NOT via run_on_main: it only imports modules (no game-object
         # access), and start() may itself run on the game main thread -- scheduling
         # onto that same thread and blocking on it would deadlock.
