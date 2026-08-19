@@ -26,13 +26,19 @@ provides desktop builds and the game mod:
   `wotstat-repl_<version>_x64-setup.exe` installer.
 - macOS: a universal `.dmg` for Apple Silicon and Intel Macs.
 - Linux x64: `.AppImage` and `.deb` packages.
-- `wotstat.repl_<version>.wotmod` for manual game installation.
+- `wotstat.repl_<version>.wotmod`, the universal game agent with both desktop
+  TCP connectivity and a standalone browser REPL.
 
 The same `.wotmod` is embedded in every desktop build. When the application can
 access a local game installation, it installs the embedded copy automatically;
-the standalone file is intended for a game on another machine or a manual
+the versioned release file is intended for a game on another machine or a manual
 installation. macOS and Linux builds can connect to a remote/Proton game, but
 do not directly launch a Windows game executable.
+
+The version is part of the release download name only. Internally the desktop
+embeds `wotstat.repl.mod` and installs it as `wotstat.repl.wotmod` for World of
+Tanks or `wotstat.repl.mtmod` for Mir Tankov. These stable, unversioned names let
+a newer build replace the previous agent instead of leaving duplicate mods.
 
 ## Usage
 
@@ -41,9 +47,24 @@ do not directly launch a Windows game executable.
 3. The application installs the agent into the selected client's `mods/<version>` directory, starts the game, and waits for the **Connected** status. If the game is already running and the agent was installed previously, click **Connect**.
 4. Enter code in the editor and press `Ctrl/Cmd+Enter`. The selection is executed, or the entire editor when nothing is selected. Results and logs appear in the console on the right.
 
+### Web REPL without the desktop application
+
+1. Install `wotstat.repl_<version>.wotmod` into the client's `mods/<version>` directory.
+2. Start the game.
+3. Open [http://127.0.0.1:8768/](http://127.0.0.1:8768/) in a browser on the same machine.
+
+The interface is available while the game is running. The browser page exposes
+only the REPL, logs, diagnostics, and completion; it has no client process
+controls, agent network settings, or MCP controls. The same mod simultaneously
+keeps its TCP connection available, so the desktop application and its MCP
+server can be used alongside the browser page. Its HTTP server listens only on
+`127.0.0.1`; LAN access is deliberately disabled. The REPL still executes
+arbitrary Python 2.7 code inside the game and must not be exposed to untrusted
+users.
+
 ## Agent network
 
-The in-game agent connects to the desktop over a persistent TCP connection.
+The universal in-game agent connects to the desktop over a persistent TCP connection.
 Token authentication is enabled by default. Local sessions listen only on
 `127.0.0.1:8766`. The agent reconnects automatically and retains up to 8 MiB of
 unacknowledged output in memory, so the game and UI may start in either order

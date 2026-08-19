@@ -1,5 +1,6 @@
 import type * as monaco from 'monaco-editor'
-import { api, type Diagnostic } from '@/shared/api'
+import type { Diagnostic } from '@/shared/api'
+import { repl } from '@/shared/repl'
 import { toMonacoMarker } from '@/entities/diagnostic'
 
 const OWNER = 'wms-lint'
@@ -8,7 +9,7 @@ const DEBOUNCE_MS = 400
 // The running game's Python 2.7 compiler is the syntax authority.
 async function collect(code: string): Promise<Diagnostic[]> {
   try {
-    const frame = await api.lintCode(code)
+    const frame = await repl.lintCode(code)
     if (frame.type === 'lint') return frame.diagnostics
   } catch {
     // No live client: there is no compatible Python 2.7 parser to consult.

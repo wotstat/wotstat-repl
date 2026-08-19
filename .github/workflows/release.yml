@@ -15,6 +15,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+
+      - run: bun install --frozen-lockfile
+
+      - name: Build embedded web frontend
+        run: bun run build:web
+
       - name: Install Python 2.7
         shell: pwsh
         run: choco install python2 --version=2.7.18 -y --no-progress
@@ -24,13 +33,13 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           $python = 'C:\Python27\python.exe'
-          foreach ($test in @('test_exec.py', 'selftest.py', 'itest.py', 'test_complete.py')) {
+          foreach ($test in @('test_exec.py', 'selftest.py', 'itest.py', 'test_complete.py', 'test_web.py', 'test_hybrid.py')) {
             & $python "mod/tests/$test"
             if ($LASTEXITCODE -ne 0) { throw "Agent test failed: $test" }
           }
 
           $embedded = 'src-tauri/resources/wotstat.repl.mod'
-          & $python mod/build.py --version $env:GITHUB_REF_NAME --out $embedded
+          & $python mod/build.py --version $env:GITHUB_REF_NAME --web-dist dist-web --out $embedded
           if ($LASTEXITCODE -ne 0) { throw 'Game mod build failed' }
 
           New-Item release-assets -ItemType Directory -Force | Out-Null
@@ -43,7 +52,7 @@ jobs:
           path: src-tauri/resources/wotstat.repl.mod
           if-no-files-found: error
 
-      - name: Upload standalone mod
+      - name: Upload universal mod
         uses: actions/upload-artifact@v4
         with:
           name: release-mod
@@ -209,7 +218,9 @@ jobs:
             - macOS: the `_universal.dmg` image for Apple Silicon and Intel Macs.
             - Linux x64: `.AppImage` or `.deb`.
 
-            The standalone `wotstat.repl_${{ github.ref_name }}.wotmod` is for manual game installation. The same mod is embedded in every desktop build and is installed automatically when the game is available locally.
+            Game mods:
+
+            - `wotstat.repl_${{ github.ref_name }}.wotmod` is the universal game agent. It connects to the desktop application over TCP and simultaneously hosts a standalone REPL UI at `http://127.0.0.1:8768/`. The same mod is embedded in every desktop build.
           draft: true
           prerelease: false
           fail_on_unmatched_files: true

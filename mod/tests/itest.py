@@ -13,6 +13,11 @@ import sys
 import tempfile
 import time
 
+try:
+    from urllib2 import Request, urlopen
+except ImportError:  # pragma: no cover - Python 3 compatibility
+    from urllib.request import Request, urlopen
+
 sys.path.insert(0, os.path.abspath(os.path.join(
     os.path.dirname(__file__), '..', 'res', 'scripts', 'common')))
 
@@ -28,6 +33,21 @@ def send_frame(sock, frame):
     if not isinstance(body, bytes):
         body = body.encode('utf-8')
     sock.sendall(body)
+
+
+def post_json(url, origin, frame):
+    body = json.dumps(frame, separators=(',', ':'))
+    if not isinstance(body, bytes):
+        body = body.encode('utf-8')
+    request = Request(url, data=body, headers={
+        'Content-Type': 'application/json',
+        'Origin': origin,
+    })
+    response = urlopen(request, timeout=4.0)
+    try:
+        return json.loads(response.read())
+    finally:
+        response.close()
 
 
 def receive_frame(sock, received, deadline):
@@ -87,7 +107,9 @@ def main():
 
         # Game first: the initial connection is refused, but captured output
         # remains in the agent's bounded RAM backlog.
-        wms_agent.start(work, interval=0.01)
+        web_endpoint = wms_agent.start(
+            work, interval=0.01, web_enabled=True, web_root=work, web_port=0)
+        assert web_endpoint and web_endpoint.startswith('http://127.0.0.1:'), web_endpoint
         print('early-startup-line')
         time.sleep(0.08)
 
@@ -122,9 +144,17 @@ def main():
             'type': 'ack', 'session': hello['session'], 'seq': early_seq,
         })
 
+        web_result = post_json(
+            web_endpoint + 'api/repl', web_endpoint.rstrip('/'), {
+                'type': 'exec', 'code': 'shared_from_web = 21',
+            })
+        assert web_result.get('ok'), web_result
+
         send_frame(client, {'id': '1', 'type': 'exec',
                             'code': "print('hello'); x = 40 + 2"})
-        send_frame(client, {'id': '2', 'type': 'exec', 'code': 'x * 2'})
+        send_frame(client, {
+            'id': '2', 'type': 'exec', 'code': 'shared_from_web * 4',
+        })
 
         results = {}
         stdout_text = replayed.get('text', '')
@@ -165,7 +195,7 @@ def main():
                 break
         assert disconnected, 'agent should send disconnected before closing TCP'
 
-        print("ITEST OK  late-ui backlog=%r  ns-persist x*2=%s" % (
+        print("ITEST OK  late-ui backlog=%r  shared web->tcp=%s" % (
             'early-startup-line', results['2']['repr']))
         return 0
     finally:

@@ -1,5 +1,6 @@
 import type * as monaco from 'monaco-editor'
-import { api, type Candidate } from '@/shared/api'
+import type { Candidate } from '@/shared/api'
+import { repl } from '@/shared/repl'
 import { toMonacoCompletion } from '@/entities/completion-item'
 
 const COMPLETION_REFRESH_DELAY = 100
@@ -85,7 +86,7 @@ function completionRequest(model: monaco.editor.ITextModel, position: monaco.Pos
 
 async function gather(prefixLine: string): Promise<Candidate[]> {
   try {
-    const response = await api.complete(prefixLine)
+    const response = await repl.complete(prefixLine)
     return response.type === 'complete' ? response.candidates : []
   } catch {
     return []
@@ -125,7 +126,7 @@ export function registerPythonCompletion(
       return Promise.resolve()
     }
     if (!state.pending) {
-      state.pending = api.complete(key, 1).then((response) => {
+      state.pending = repl.complete(key, 1).then((response) => {
         if (response.type !== 'complete') return
         const candidate = response.candidates.find((c) => c.name === item.insertText)
         if (candidate) {

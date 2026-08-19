@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "wotstat-repl",
-  "version": "0.4.0",
+  "version": "1.1.0",
   "identifier": "info.wotstat.wotrepl",
   "build": {
     "frontendDist": "../dist",

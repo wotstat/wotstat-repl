@@ -15,7 +15,7 @@ RES_ROOT = os.path.join(HERE, 'res')
 META_PATH = os.path.join(HERE, 'meta.xml')
 
 
-def build(version, output):
+def build(version, output, web_dist):
     if sys.version_info[:2] != (2, 7):
         raise SystemExit('Python 2.7 is required (got %s)' % sys.version.split()[0])
 
@@ -28,14 +28,29 @@ def build(version, output):
             ignore=shutil.ignore_patterns('__pycache__', '*.pyc'),
         )
 
+        web_dist = os.path.abspath(web_dist)
+        if not os.path.isfile(os.path.join(web_dist, 'index.html')):
+            raise RuntimeError('web dist is missing index.html: %s' % web_dist)
+        web_target = os.path.join(staged_res, 'wotstat_repl', 'web')
+        web_parent = os.path.dirname(web_target)
+        if not os.path.isdir(web_parent):
+            os.makedirs(web_parent)
+        shutil.copytree(web_dist, web_target)
+
         version_path = os.path.join(
             staged_res, 'scripts', 'common', 'wms_agent', '__init__.py')
         with open(version_path, 'r') as handle:
             version_source = handle.read()
         if version_source.count('{{VERSION}}') != 1:
             raise RuntimeError('agent __version__ must contain exactly one {{VERSION}} placeholder')
+        if version_source.count('{{WEB_ENABLED}}') != 1:
+            raise RuntimeError(
+                'agent __web_enabled__ must contain exactly one '
+                '{{WEB_ENABLED}} placeholder')
         with open(version_path, 'w') as handle:
-            handle.write(version_source.replace('{{VERSION}}', version))
+            handle.write(version_source
+                         .replace('{{VERSION}}', version)
+                         .replace('{{WEB_ENABLED}}', '1'))
 
         compiled = 0
         for root, _dirs, files in os.walk(staged_res):
@@ -94,9 +109,20 @@ def _verify(output, version):
             raise RuntimeError('archive contains uncompiled Python sources')
         if any('__pycache__' in name.split('/') for name in names):
             raise RuntimeError('archive contains Python cache directories')
+        web_index = 'res/wotstat_repl/web/index.html'
+        web_assets = [name for name in names if name.startswith('res/wotstat_repl/web/assets/')]
+        socket_transport = 'res/scripts/common/wms_agent/socketbus.pyc'
+        web_transport = 'res/scripts/common/wms_agent/webbus.pyc'
+        hybrid_transport = 'res/scripts/common/wms_agent/hybridbus.pyc'
+        if web_index not in names or not web_assets:
+            raise RuntimeError('universal archive is missing frontend assets')
+        if not set([
+                socket_transport, web_transport, hybrid_transport]).issubset(names):
+            raise RuntimeError('universal archive is missing a transport')
         agent_pyc = archive.read('res/scripts/common/wms_agent/__init__.pyc')
-        if version not in agent_pyc or '{{VERSION}}' in agent_pyc:
-            raise RuntimeError('agent version was not injected')
+        if (version not in agent_pyc or '{{VERSION}}' in agent_pyc
+                or '{{WEB_ENABLED}}' in agent_pyc):
+            raise RuntimeError('agent build metadata was not injected')
         corrupt = archive.testzip()
         if corrupt is not None:
             raise RuntimeError('corrupt archive member: %s' % corrupt)
@@ -108,8 +134,11 @@ def main():
     parser = argparse.ArgumentParser(description='Build the universal WotStat REPL .mod')
     parser.add_argument('--version', required=True)
     parser.add_argument('--out', required=True)
+    parser.add_argument(
+        '--web-dist', required=True,
+        help='Vite dist directory for the embedded web build')
     args = parser.parse_args()
-    build(args.version, args.out)
+    build(args.version, args.out, args.web_dist)
 
 
 if __name__ == '__main__':

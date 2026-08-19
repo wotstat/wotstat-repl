@@ -5,8 +5,22 @@ import path from 'node:path'
 
 const host = process.env.TAURI_DEV_HOST
 
-export default defineConfig({
-  plugins: [react(), tailwindcss()],
+export default defineConfig(({ mode }) => ({
+  plugins: [
+    react(),
+    tailwindcss(),
+    {
+      name: 'repl-runtime-entry',
+      transformIndexHtml: {
+        order: 'pre',
+        handler(html) {
+          return mode === 'web'
+            ? html.replace('/src/app/main.tsx', '/src/app/main.web.tsx')
+            : html
+        },
+      },
+    },
+  ],
   build: {
     // The UI is bundled into the desktop app and never crosses a network.
     chunkSizeWarningLimit: 6_000,
@@ -25,4 +39,4 @@ export default defineConfig({
     hmr: host ? { protocol: 'ws', host, port: 1421 } : undefined,
     watch: { ignored: ['**/src-tauri/**'] },
   },
-})
+}))

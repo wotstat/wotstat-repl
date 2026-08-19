@@ -1,6 +1,5 @@
 import { useEffect, useState, type FormEvent } from 'react'
 import { Command } from 'cmdk'
-import { disconnect } from '@/features/connect-session'
 import { consoleBus } from '@/entities/console'
 import { loadState, saveState } from '@/shared/lib'
 import {
@@ -15,18 +14,19 @@ type PaletteCommand = {
   run?: () => void
 }
 
-const COMMANDS: PaletteCommand[] = [
-  { id: 'clear', title: 'Clear console', run: () => consoleBus.clear() },
-  { id: 'disconnect', title: 'Disconnect session', run: () => void disconnect() },
-  { id: 'completion-budget', title: 'Set signature budget' },
-]
-
-export function CommandPalette() {
+export function CommandPalette({ onDisconnect }: { onDisconnect?: () => void }) {
   const [open, setOpen] = useState(false)
   const [query, setQuery] = useState('')
   const [budgetEditing, setBudgetEditing] = useState(false)
   const [budgetValue, setBudgetValue] = useState('')
   const [budgetError, setBudgetError] = useState<string | null>(null)
+  const commands: PaletteCommand[] = [
+    { id: 'clear', title: 'Clear console', run: () => consoleBus.clear() },
+    ...(onDisconnect
+      ? [{ id: 'disconnect', title: 'Disconnect session', run: onDisconnect }]
+      : []),
+    { id: 'completion-budget', title: 'Set signature budget' },
+  ]
 
   const cancelBudgetEdit = () => {
     setBudgetEditing(false)
@@ -152,7 +152,7 @@ export function CommandPalette() {
           />
           <Command.List className="max-h-72 overflow-auto py-1">
             <Command.Empty className="px-3 py-2 text-[12px] text-faint">No commands</Command.Empty>
-            {COMMANDS.map((c) => (
+            {commands.map((c) => (
               <Command.Item
                 key={c.id}
                 value={c.title}

@@ -1,9 +1,8 @@
+import type { ReactNode } from 'react'
 import { ConnectionBadge, useSession } from '@/entities/session'
 import { useEditorCursor } from '@/entities/editor'
-import { McpControl } from '@/features/manage-mcp'
-import { AgentNetworkControl } from '@/features/connect-session'
 
-export function StatusBar() {
+export function StatusBar({ controls }: { controls?: ReactNode }) {
   const line = useEditorCursor((s) => s.line)
   const column = useEditorCursor((s) => s.column)
   const status = useSession((s) => s.status)
@@ -27,8 +26,7 @@ export function StatusBar() {
         )}
       </div>
       <div className="flex items-center gap-3">
-        <AgentNetworkControl />
-        <McpControl />
+        {controls}
         <span className="text-faint">
           Ln {line}, Col {column}
         </span>

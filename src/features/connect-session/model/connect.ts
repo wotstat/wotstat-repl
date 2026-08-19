@@ -1,11 +1,7 @@
-import { api, createServerChannel } from "@/shared/api";
+import { repl } from "@/shared/repl";
+import type { ServerEvent } from "@/shared/api";
 import { useSession } from "@/entities/session";
 import { consoleBus } from "@/entities/console";
-import {
-  AGENT_LAN_STORAGE_KEY,
-  AGENT_SECURE_STORAGE_KEY,
-} from "@/shared/config";
-import { loadState } from "@/shared/lib";
 
 let connectGeneration = 0;
 
@@ -38,13 +34,11 @@ function waitForConnected(generation: number): Promise<boolean> {
 }
 
 export async function connect(): Promise<void> {
-  const lanEnabled = loadState(AGENT_LAN_STORAGE_KEY, false);
-  const secureEnabled = loadState(AGENT_SECURE_STORAGE_KEY, true);
   const generation = ++connectGeneration;
   const session = useSession.getState();
   session.setStatus("connecting");
 
-  const channel = createServerChannel((event) => {
+  const onEvent = (event: ServerEvent) => {
     if (generation !== connectGeneration) return;
     if (event.kind === "log") {
       consoleBus.append(event.lines);
@@ -62,20 +56,19 @@ export async function connect(): Promise<void> {
         consoleBus.system("game disconnected\n");
       }
     }
-  });
+  };
 
   try {
-    const info = await api.agentConnectionInfo();
+    const connection = await repl.connect(onEvent);
     if (generation !== connectGeneration) return;
-    session.setEndpoint(lanEnabled ? info.networkAddress : info.localAddress);
-    await api.connect(lanEnabled, secureEnabled, channel);
+    session.setEndpoint(connection.endpoint);
     if (generation !== connectGeneration) {
-      await api.disconnect().catch(() => undefined);
+      await repl.disconnect().catch(() => undefined);
       return;
     }
-    consoleBus.system(
-      `listening on ${lanEnabled ? info.networkAddress : info.localAddress} — waiting for the game\n`,
-    );
+    if (connection.waitingForAgent) {
+      consoleBus.system(`listening on ${connection.endpoint} — waiting for the game\n`);
+    }
     await waitForConnected(generation);
   } catch (error) {
     if (generation !== connectGeneration) return;
@@ -86,7 +79,7 @@ export async function connect(): Promise<void> {
 
 export async function disconnect(): Promise<void> {
   connectGeneration += 1;
-  await api.disconnect().catch(() => undefined);
+  await repl.disconnect().catch(() => undefined);
   useSession.getState().setStatus("disconnected");
   consoleBus.system("disconnected\n");
 }

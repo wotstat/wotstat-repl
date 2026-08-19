@@ -9,8 +9,7 @@ import time
 import threading
 import collections
 
-from . import __version__
-from .socketbus import SocketBus
+from . import __version__, __web_enabled__
 from .capture import Capture
 from .runner import run_on_main
 from .handlers import DISPATCH, MAIN_THREAD_OPS, seed_namespace
@@ -19,8 +18,22 @@ _state = {'agent': None, 'running': False}
 
 
 class _Agent(object):
-    def __init__(self, config_dir, interval):
-        self._bus = SocketBus(config_dir, __version__, os.getpid())
+    def __init__(self, config_dir, interval, web_enabled, web_root, web_port):
+        from .socketbus import SocketBus
+        tcp_bus = SocketBus(config_dir, __version__, os.getpid())
+        if web_enabled:
+            from .hybridbus import HybridBus
+            from .webbus import WebBus
+            web_bus = None
+            web_error = None
+            try:
+                web_bus = WebBus(
+                    config_dir, __version__, os.getpid(), web_root, web_port)
+            except Exception as error:
+                web_error = str(error)
+            self._bus = HybridBus(tcp_bus, web_bus, web_error)
+        else:
+            self._bus = tcp_bus
         self._interval = interval
         self._queue = collections.deque()
         self._capture = Capture(self._queue.append)
@@ -29,6 +42,9 @@ class _Agent(object):
 
     def start(self):
         self._capture.install()
+        web_error = getattr(self._bus, 'web_error', None)
+        if web_error:
+            print 'WotStat REPL: web UI unavailable: %s' % web_error
         # Seed inline, NOT via run_on_main: it only imports modules (no game-object
         # access), and start() may itself run on the game main thread -- scheduling
         # onto that same thread and blocking on it would deadlock.
@@ -38,6 +54,7 @@ class _Agent(object):
         thread.setDaemon(True)
         thread.start()
         self._thread = thread
+        return getattr(self._bus, 'endpoint', None)
 
     def stop(self):
         if not self._running:
@@ -104,18 +121,22 @@ class _Agent(object):
             time.sleep(self._interval)
 
 
-def start(config_dir, interval=0.05):
+def start(config_dir, interval=0.05, web_enabled=None, web_root=None, web_port=None):
     if _state['running']:
-        return
+        agent = _state.get('agent')
+        return getattr(agent._bus, 'endpoint', None) if agent is not None else None
+    if web_enabled is None:
+        web_enabled = __web_enabled__
     try:
         if not os.path.isdir(config_dir):
             os.makedirs(config_dir)
     except OSError:
         pass
-    agent = _Agent(config_dir, interval)
-    agent.start()
+    agent = _Agent(config_dir, interval, web_enabled, web_root, web_port)
+    endpoint = agent.start()
     _state['agent'] = agent
     _state['running'] = True
+    return endpoint
 
 
 def stop():

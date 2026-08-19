@@ -24,15 +24,18 @@ try {
     bun install --frozen-lockfile
     if ($LASTEXITCODE -ne 0) { throw 'Bun dependency install failed' }
 
+    bun run build:web
+    if ($LASTEXITCODE -ne 0) { throw 'Embedded web frontend build failed' }
+
     $mod = 'src-tauri/resources/wotstat.repl.mod'
     Remove-Item $mod -Force -ErrorAction SilentlyContinue
 
-    foreach ($test in @('test_exec.py', 'selftest.py', 'itest.py', 'test_complete.py')) {
+    foreach ($test in @('test_exec.py', 'selftest.py', 'itest.py', 'test_complete.py', 'test_web.py', 'test_hybrid.py')) {
         & $python "mod/tests/$test"
         if ($LASTEXITCODE -ne 0) { throw "Agent test failed: $test" }
     }
 
-    & $python mod/build.py --version $Version --out $mod
+    & $python mod/build.py --version $Version --web-dist dist-web --out $mod
     if ($LASTEXITCODE -ne 0) { throw 'Game mod build failed' }
 
     cargo test --manifest-path src-tauri/Cargo.toml
