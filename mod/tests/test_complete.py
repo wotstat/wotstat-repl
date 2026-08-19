@@ -20,6 +20,16 @@ def main():
         pass
 
     ns['spaceLoadStatus'] = spaceLoadStatus
+
+    def pythonOnly(required, optional=3, *args, **kwargs):
+        pass
+    ns['pythonOnly'] = pythonOnly
+
+    class LiveAvatar(object):
+        def move(self, distance, speed=1):
+            pass
+    ns['liveAvatar'] = LiveAvatar()
+
     ns['Avatar'] = Avatar
     ns['spaceConst'] = 42
 
@@ -49,6 +59,46 @@ def main():
     assert fn, by_name
     assert fn.get('signature') == '(distance: float = -1.0) -> float', fn
     assert fn.get('kind') == 'function', fn
+
+    python_out = handlers.handle_complete({
+        'id': 'c', 'type': 'complete', 'prefix': u'pythonO',
+    })
+    python_fn = dict((c['name'], c) for c in python_out['candidates'])['pythonOnly']
+    assert python_fn.get('signature') == '(required, optional=3, *args, **kwargs)', python_fn
+
+    method_out = handlers.handle_complete({
+        'id': 'c', 'type': 'complete', 'prefix': u'liveAvatar.mo',
+    })
+    method = dict((c['name'], c) for c in method_out['candidates'])['move']
+    assert method.get('signature') == '(distance, speed=1)', method
+
+    # Repeated requests reuse both expensive runtime operations.
+    handlers._DIR_CACHE.clear()
+    builtin_dir = dir
+    dir_calls = []
+    handlers.dir = lambda obj: (dir_calls.append(obj), builtin_dir(obj))[1]
+    try:
+        handlers.handle_complete({'id': 'c', 'type': 'complete', 'prefix': u'liveAvatar.mo'})
+        handlers.handle_complete({'id': 'c', 'type': 'complete', 'prefix': u'liveAvatar.mo'})
+    finally:
+        del handlers.dir
+    assert len(dir_calls) == 1, dir_calls
+
+    def cacheOnly(value):
+        pass
+    ns['cacheOnly'] = cacheOnly
+    handlers._SIGNATURE_CACHE.clear()
+    original_inspect_signature = handlers._inspect_signature
+    signature_calls = []
+    handlers._inspect_signature = lambda obj: (
+        signature_calls.append(obj), original_inspect_signature(obj)
+    )[1]
+    try:
+        handlers.handle_complete({'id': 'c', 'type': 'complete', 'prefix': u'cacheOnly'})
+        handlers.handle_complete({'id': 'c', 'type': 'complete', 'prefix': u'cacheOnly'})
+    finally:
+        handlers._inspect_signature = original_inspect_signature
+    assert len(signature_calls) == 1, signature_calls
 
     const = by_name.get('spaceConst')
     assert const and const.get('kind') == 'int', const
@@ -94,8 +144,9 @@ def main():
     described = [c for c in limited['candidates'] if c.get('kind')]
     assert len(described) == 1, described
 
-    print('COMPLETE OK -- sig=%r kind(const)=%s kind(cls)=%s' % (
-        fn['signature'], const['kind'], cls['kind']))
+    print('COMPLETE OK -- native=%r python=%r method=%r caches=dir:%d/sig:%d kind(const)=%s kind(cls)=%s' % (
+        fn['signature'], python_fn['signature'], method['signature'], len(dir_calls),
+        len(signature_calls), const['kind'], cls['kind']))
     return 0
 
 

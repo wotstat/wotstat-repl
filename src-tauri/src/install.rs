@@ -46,25 +46,6 @@ pub fn default_buffer_dir_path() -> PathBuf {
     app_data_root().join("buffer")
 }
 
-/// Canonical jedi sys_path root for runtime-generated native-module stubs.
-pub fn stubs_dir_path() -> PathBuf {
-    app_data_root().join("stubs")
-}
-
-/// Persist runtime dump stubs as `<type>.pyi` files; returns the stubs dir.
-pub fn write_stubs(stubs: &std::collections::HashMap<String, String>) -> Result<String, String> {
-    let dir = stubs_dir_path();
-    fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-    for (module, body) in stubs {
-        // Guard against path traversal from a module name.
-        if module.is_empty() || module.contains(['/', '\\', '.', ':']) {
-            continue;
-        }
-        fs::write(dir.join(format!("{module}.pyi")), body).map_err(|e| e.to_string())?;
-    }
-    Ok(dir.to_string_lossy().into_owned())
-}
-
 pub fn detect_games() -> Vec<GameInfo> {
     let mut out = Vec::new();
     let mut seen = std::collections::HashSet::new();

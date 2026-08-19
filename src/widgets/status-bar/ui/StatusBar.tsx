@@ -24,7 +24,6 @@ export function StatusBar() {
             agent v{agentVersion ?? '?'} · pid {agentPid ?? '?'}
           </span>
         )}
-        <span className="text-faint">jedi: idle</span>
       </div>
       <div className="flex items-center gap-3">
         <McpControl />

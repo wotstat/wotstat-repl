@@ -1,25 +1,19 @@
 import type * as monaco from 'monaco-editor'
 import { api, type Diagnostic } from '@/shared/api'
-import { extractArray } from '@/shared/lib'
 import { toMonacoMarker } from '@/entities/diagnostic'
 
 const OWNER = 'wms-lint'
 const DEBOUNCE_MS = 400
 
-// Authoritative py2.7 compile() in the game when connected; otherwise the jedi
-// static worker (compile + pyflakes). Either way, markers land on the model.
+// The running game's Python 2.7 compiler is the syntax authority.
 async function collect(code: string): Promise<Diagnostic[]> {
   try {
     const frame = await api.lintCode(code)
     if (frame.type === 'lint') return frame.diagnostics
   } catch {
-    // not connected; fall through to static
+    // No live client: there is no compatible Python 2.7 parser to consult.
   }
-  try {
-    return extractArray<Diagnostic>(await api.jediLint(code), 'diagnostics')
-  } catch {
-    return []
-  }
+  return []
 }
 
 export function attachLinter(

@@ -1,6 +1,5 @@
 mod commands;
 mod install;
-mod jedi;
 mod mcp;
 mod process;
 mod protocol;
@@ -43,8 +42,6 @@ pub fn run() {
             commands::mcp_remove_from_codex,
             commands::mcp_remove_from_claude,
             commands::default_buffer_dir,
-            commands::stubs_dir,
-            commands::write_stubs,
             commands::detect_games,
             commands::inspect_game_dir,
             commands::install_agent,
@@ -59,10 +56,6 @@ pub fn run() {
             commands::complete,
             commands::inspect,
             commands::lint_code,
-            commands::dump_object,
-            commands::jedi_start,
-            commands::jedi_complete,
-            commands::jedi_lint,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -1,18 +1,25 @@
 """Request handlers. Each takes a request dict and returns a response dict.
 
-Game-touching handlers (exec/complete/inspect/dump) are marshaled to the main
+Game-touching handlers (exec/complete/inspect) are marshaled to the main
 thread by the loop; lint is pure and runs anywhere.
 """
 
 import os
 import sys
 import inspect
+import time
 import traceback
+from collections import OrderedDict
 
 from . import __version__
 
 _DEFAULT_COMPLETION_BUDGET = 120
 _MAX_COMPLETION_BUDGET = 10000
+_CACHE_LIMIT = 2048
+_DIR_CACHE_TTL = 1.0
+_CACHE_MISS = object()
+_DIR_CACHE = OrderedDict()
+_SIGNATURE_CACHE = OrderedDict()
 
 
 def _ns():
@@ -103,6 +110,8 @@ def handle_exec(req):
         sys.stderr = saved_err
         out['stdout'] = captured_out.getvalue()
         out['stderr'] = captured_err.getvalue()
+        # Executed code may add or remove attributes from live objects.
+        _DIR_CACHE.clear()
     return out
 
 
@@ -145,11 +154,12 @@ def _describe_into(cand, name, obj):
         cand['kind'] = 'class'
     elif callable(obj):
         cand['kind'] = 'function'
-        sig = _doc_signature(name, obj)
-        if sig is not None:
-            cand['signature'] = (sig[0] + sig[1]).strip()
     else:
         cand['kind'] = type(obj).__name__
+    if inspect.isclass(obj) or callable(obj):
+        signature = _signature(name, obj)
+        if signature is not None:
+            cand['signature'] = signature
     doc = getattr(obj, '__doc__', None)
     if doc:
         cand['doc'] = _short(doc, 200)
@@ -163,16 +173,46 @@ def _builtins_ns():
     return b
 
 
-def _iter_public_attrs(obj, keep_dunder=None):
-    """Yield attribute names from sorted(dir(obj)), skipping dunders unless in keep_dunder."""
+def _cache_get(cache, key):
     try:
-        attrs = sorted(dir(obj))
+        value = cache.pop(key)
+    except KeyError:
+        return _CACHE_MISS
+    cache[key] = value
+    return value
+
+
+def _cache_put(cache, key, value):
+    try:
+        cache.pop(key)
+    except KeyError:
+        pass
+    cache[key] = value
+    while len(cache) > _CACHE_LIMIT:
+        cache.popitem(last=False)
+
+
+def _cached_attrs(obj):
+    """Cache the expensive dir() walk briefly without retaining the live object."""
+    key = (id(obj), id(type(obj)))
+    now = time.time()
+    cached = _cache_get(_DIR_CACHE, key)
+    if cached is not _CACHE_MISS and now - cached[0] <= _DIR_CACHE_TTL:
+        return cached[1]
+    try:
+        attrs = tuple(sorted(dir(obj)))
     except Exception:
-        return
+        attrs = ()
+    _cache_put(_DIR_CACHE, key, (now, attrs))
+    return attrs
+
+
+def _iter_public_attrs(obj):
+    """Yield public attribute names from a short-lived dir() cache."""
+    attrs = _cached_attrs(obj)
     for attr in attrs:
         if attr.startswith('__'):
-            if keep_dunder is None or attr not in keep_dunder:
-                continue
+            continue
         yield attr
 
 
@@ -234,7 +274,7 @@ def _complete_names(names, partial, ns, budget):
             continue
         if not _matches_completion(partial, name):
             continue
-        cand = {'name': name, 'source': 'live'}
+        cand = {'name': name}
         if budget[0] > 0:
             budget[0] -= 1
             try:
@@ -273,7 +313,7 @@ def handle_complete(req):
                            key=lambda value: (value != partial, value)):
             if not _matches_completion(partial, attr):
                 continue
-            cand = {'name': attr, 'source': 'live'}
+            cand = {'name': attr}
             if budget[0] > 0:
                 budget[0] -= 1
                 try:
@@ -291,7 +331,6 @@ def handle_complete(req):
 
 
 def handle_inspect(req):
-    import inspect
     out = {'id': req.get('id'), 'type': 'inspect',
            'signature': None, 'doc': None}
     try:
@@ -302,12 +341,11 @@ def handle_inspect(req):
         out['doc'] = inspect.getdoc(obj)
     except Exception:
         pass
-    try:
-        if inspect.isfunction(obj) or inspect.ismethod(obj):
-            spec = inspect.getargspec(obj)
-            out['signature'] = req.get('expr', '') + inspect.formatargspec(*spec)
-    except Exception:
-        pass
+    expr = req.get('expr', '')
+    name = expr.rsplit('.', 1)[-1]
+    signature = _signature(name, obj)
+    if signature is not None:
+        out['signature'] = expr + signature
     return out
 
 
@@ -352,15 +390,69 @@ def _doc_signature(name, obj):
     return None
 
 
-_PRIMITIVES = (type(None), bool, int, float, complex, str)
-_STRING_TYPES = (str,)
-try:
-    _PRIMITIVES = _PRIMITIVES + (long, unicode)  # noqa: F821  py2.7
-    _STRING_TYPES = (str, unicode)  # noqa: F821  json.loads yields unicode on py2.7
-except NameError:
-    pass
+def _signature_target(obj):
+    if inspect.isclass(obj):
+        return obj
+    target = getattr(obj, 'im_func', None) or getattr(obj, '__func__', None)
+    if target is not None:
+        return target
+    if not inspect.isroutine(obj) and callable(obj):
+        call = getattr(obj, '__call__', obj)
+        return getattr(call, 'im_func', None) or getattr(call, '__func__', None) or call
+    return obj
 
-_KEEP_DUNDER = frozenset(['__init__', '__call__', '__getitem__', '__len__', '__iter__'])
+
+def _inspect_signature(obj):
+    """Best-effort callable signature, compatible with Python 2.7 and modern Python."""
+    try:
+        signature = getattr(inspect, 'signature', None)
+        if signature is not None:
+            return str(signature(obj))
+    except Exception:
+        pass
+
+    target = obj
+    strip_first = False
+    if inspect.isclass(obj):
+        target = getattr(obj, '__init__', None)
+        strip_first = target is not None
+    elif inspect.ismethod(obj):
+        bound_to = getattr(obj, 'im_self', None) or getattr(obj, '__self__', None)
+        target = getattr(obj, 'im_func', None) or getattr(obj, '__func__', None) or obj
+        strip_first = bound_to is not None
+    elif not inspect.isfunction(obj) and callable(obj):
+        target = getattr(obj, '__call__', None)
+        if target is not None:
+            bound_to = getattr(target, 'im_self', None) or getattr(target, '__self__', None)
+            target = getattr(target, 'im_func', None) or getattr(target, '__func__', None) or target
+            strip_first = bound_to is not None
+    if target is None:
+        return None
+
+    try:
+        spec = inspect.getargspec(target)
+        args = list(spec.args)
+        if strip_first and args:
+            args.pop(0)
+        return inspect.formatargspec(args, spec.varargs, spec.keywords, spec.defaults)
+    except Exception:
+        return None
+
+
+def _signature(name, obj):
+    target = _signature_target(obj)
+    key = (name, id(target), id(type(target)))
+    cached = _cache_get(_SIGNATURE_CACHE, key)
+    if cached is not _CACHE_MISS:
+        return cached
+
+    documented = _doc_signature(name, obj)
+    if documented is not None:
+        value = (documented[0] + documented[1]).strip()
+    else:
+        value = _inspect_signature(obj)
+    _cache_put(_SIGNATURE_CACHE, key, value)
+    return value
 
 
 def _short(text, limit=160):
@@ -372,216 +464,13 @@ def _short(text, limit=160):
     return text if len(text) <= limit else text[:limit] + '...'
 
 
-def _safe_repr(obj):
-    try:
-        return _short(repr(obj))
-    except Exception:
-        return '<repr failed>'
-
-
-def _kind_of(obj):
-    if inspect.isclass(obj):
-        return 'class'
-    if inspect.isroutine(obj) or callable(obj):
-        return 'function'
-    if isinstance(obj, _PRIMITIVES):
-        return 'value'
-    return 'instance'
-
-
-def _introspect(name, obj, budget, depth, seen):
-    """Recursively describe a LIVE object: its type, members, fields, values.
-
-    Captures what static analysis can't: entitydef-injected attributes, attached
-    components, C-extension instance fields, and real runtime types. Bounded by
-    budget (node count + depth + per-object breadth) and cycle-safe via id() set.
-    """
-    if budget['nodes'] <= 0:
-        return None
-    budget['nodes'] -= 1
-
-    kind = _kind_of(obj)
-    node = {'name': name, 'kind': kind}
-    try:
-        # For a class, its own name is the useful type (not its metaclass 'type').
-        node['type'] = obj.__name__ if kind == 'class' else type(obj).__name__
-    except Exception:
-        node['type'] = '?'
-
-    if kind in ('class', 'function'):
-        sig = _doc_signature(name, obj)
-        if sig is not None:
-            node['signature'] = (name + sig[0] + sig[1]).strip()
-        doc = getattr(obj, '__doc__', None)
-        if doc:
-            node['doc'] = _short(doc, 200)
-
-    if kind == 'value':
-        node['repr'] = _safe_repr(obj)
-        return node
-
-    # Functions/methods are leaves: never walk their internals (func_globals,
-    # im_func, __call__, ...) -- that explodes and leaks the module dict.
-    if kind == 'function':
-        return node
-
-    # Recurse into classes and instances only; stop at depth/cycle limits.
-    if depth <= 0:
-        return node
-    oid = id(obj)
-    if oid in seen:
-        node['cyclic'] = True
-        return node
-    seen = seen | set([oid])
-
-    target = obj
-    members = []
-    count = 0
-    for attr in _iter_public_attrs(target, keep_dunder=_KEEP_DUNDER):
-        if count >= budget['max_attrs'] or budget['nodes'] <= 0:
-            node['truncated'] = True
-            break
-        try:
-            value = getattr(target, attr)  # may fire a property getter
-        except Exception as exc:
-            members.append({'name': attr, 'kind': 'error', 'error': _short(str(exc))})
-            count += 1
-            continue
-        child = _introspect(attr, value, budget, depth - 1, seen)
-        if child is not None:
-            members.append(child)
-            count += 1
-    node['members'] = members
-    return node
-
-
-def _node_to_stub(node):
-    """Emit a .pyi class for a dumped class/instance, capturing runtime-injected
-    fields (typed by their live type) and methods (signatures from __doc__)."""
-    type_name = node.get('type') or node.get('name')
-    if node.get('kind') not in ('instance', 'class') or not type_name:
-        return None
-    if not type_name.replace('_', '').isalnum():
-        return None
-    lines = ['class %s(object):' % type_name]
-    body = []
-    for m in node.get('members', []):
-        mname = m.get('name', '')
-        if not mname or mname.startswith('__'):
-            continue
-        mkind = m.get('kind')
-        if mkind == 'function':
-            sig = m.get('signature')
-            if sig and '(' in sig:
-                params = sig[sig.index('('):]
-                body.append('    def %s%s: ...' % (mname, params if params.startswith('(') else '(self, *args, **kwargs)'))
-            else:
-                body.append('    def %s(self, *args, **kwargs): ...' % mname)
-        elif mkind in ('value', 'instance'):
-            body.append('    %s = ...  # %s' % (mname, m.get('type', '?')))
-    if not body:
-        body.append('    ...')
-    lines.extend(body)
-    return type_name, '\n'.join(lines) + '\n'
-
-
-def _collect_stubs(node, stubs, seen):
-    """Walk the dump tree and emit a .pyi class for EVERY distinct live type
-    encountered (not just the root), so completion learns the whole live world.
-    Keeps the richest stub per type (the node with the most members)."""
-    if not node:
-        return
-    if node.get('kind') in ('instance', 'class'):
-        res = _node_to_stub(node)
-        if res is not None:
-            tname, text = res
-            count = len(node.get('members', []))
-            if tname not in seen or count > seen[tname]:
-                seen[tname] = count
-                stubs[tname] = text
-    for member in node.get('members', []):
-        _collect_stubs(member, stubs, seen)
-
-
-# Roots walked by "dump all" -- evaluated best-effort; missing ones are skipped
-# silently (they are probes; not every build/state exposes every root).
-DEFAULT_DUMP_ROOTS = [
-    'BigWorld', 'Math', 'ResMgr', 'Account',
-    'BigWorld.player()', 'BigWorld.entities', 'BigWorld.target',
-    'BigWorld.camera',
-]
-
-
-def _resolve_root(expr, ns):
-    """Eval an expr; if it's a bare module name not in the namespace, import it.
-    Returns (obj, error_or_None)."""
-    try:
-        return eval(expr, ns), None
-    except BaseException as exc:
-        ident = expr.strip()
-        if ident and all(c.isalnum() or c == '_' for c in ident):
-            try:
-                return __import__(ident), None
-            except BaseException:
-                pass
-        return None, _short(str(exc))
-
-
-def _normalize_dump_exprs(exprs):
-    """Return (expr_list, is_dump_all) from the raw expr field of a dump request.
-
-    CRITICAL py2.7: json.loads yields unicode, so a single string (str OR unicode,
-    via _STRING_TYPES) must become a one-element list -- must NOT be iterated
-    char-by-char.
-    """
-    if exprs in ('*', ['*'], None, ''):
-        return DEFAULT_DUMP_ROOTS, True
-    if isinstance(exprs, _STRING_TYPES):
-        return [exprs], False
-    return exprs, False
-
-
-def handle_dump(req):
-    """Deep runtime introspection of live game objects -> tree + per-type stubs.
-
-    req: { expr: "BigWorld.player()" | ["a","b"] | "*" (= dump everything),
-           depth?, max_attrs?, max_nodes?, stubs?: true }
-    out['stubs'] maps EVERY distinct live type encountered to a runtime-informed
-    .pyi class (capturing entitydef-injected fields static can't see).
-    """
-    out = {'id': req.get('id'), 'type': 'dump', 'roots': [], 'errors': [], 'stubs': {}}
-    exprs, dump_all = _normalize_dump_exprs(req.get('expr'))
-    budget = {
-        'nodes': int(req.get('max_nodes', 30000 if dump_all else 4000)),
-        'max_attrs': int(req.get('max_attrs', 80)),
-    }
-    depth = int(req.get('depth', 3 if dump_all else 2))
-    seen_types = {}
-    ns = _ns()
-    for expr in exprs:
-        obj, err = _resolve_root(expr, ns)
-        if obj is None:
-            # In dump-all mode the roots are best-effort probes -> skip silently.
-            if not dump_all:
-                out['errors'].append({'expr': expr, 'error': err or 'unresolved'})
-            continue
-        root = _introspect(expr, obj, budget, depth, set())
-        out['roots'].append(root)
-        if req.get('stubs', True):
-            _collect_stubs(root, out['stubs'], seen_types)
-        if budget['nodes'] <= 0:
-            break
-    return out
-
-
 DISPATCH = {
     'hello': handle_hello,
     'exec': handle_exec,
     'complete': handle_complete,
     'inspect': handle_inspect,
     'lint': handle_lint,
-    'dump': handle_dump,
 }
 
 # Ops that touch live game objects and must run on the main thread.
-MAIN_THREAD_OPS = frozenset(['exec', 'complete', 'inspect', 'dump'])
+MAIN_THREAD_OPS = frozenset(['exec', 'complete', 'inspect'])

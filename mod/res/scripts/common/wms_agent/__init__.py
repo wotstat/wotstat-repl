@@ -2,7 +2,7 @@
 
 Loaded inside the running WoT client by the bw_site loader. Exposes a tiny
 file-buffer RPC the desktop app drives: it streams captured stdout/log output
-and answers exec/complete/inspect/lint/dump requests on the game main thread.
+and answers exec/complete/inspect/lint requests on the game main thread.
 
 Public API:
     start(buffer_dir)  -> begin serving

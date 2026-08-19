@@ -2,7 +2,6 @@
 //! events streamed to the frontend over a Tauri channel.
 
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 
 /// desktop -> game. Serialized as `{ "type": "...", "id": "...", ... }`.
 #[derive(Debug, Clone, Serialize)]
@@ -26,11 +25,6 @@ pub enum InFrame {
         id: String,
         code: String,
     },
-    Dump {
-        id: String,
-        expr: String,
-        depth: u32,
-    },
 }
 
 impl InFrame {
@@ -40,8 +34,7 @@ impl InFrame {
             InFrame::Exec { id, .. }
             | InFrame::Complete { id, .. }
             | InFrame::Inspect { id, .. }
-            | InFrame::Lint { id, .. }
-            | InFrame::Dump { id, .. } => Some(id),
+            | InFrame::Lint { id, .. } => Some(id),
         }
     }
 }
@@ -91,15 +84,6 @@ pub enum OutFrame {
         id: String,
         diagnostics: Vec<Diagnostic>,
     },
-    Dump {
-        id: String,
-        #[serde(default)]
-        roots: serde_json::Value,
-        #[serde(default)]
-        errors: serde_json::Value,
-        #[serde(default)]
-        stubs: HashMap<String, String>,
-    },
 }
 
 impl OutFrame {
@@ -110,8 +94,7 @@ impl OutFrame {
             OutFrame::Result { id, .. }
             | OutFrame::Complete { id, .. }
             | OutFrame::Inspect { id, .. }
-            | OutFrame::Lint { id, .. }
-            | OutFrame::Dump { id, .. } => Some(id),
+            | OutFrame::Lint { id, .. } => Some(id),
         }
     }
 }
@@ -125,8 +108,6 @@ pub struct Candidate {
     pub signature: Option<String>,
     #[serde(default)]
     pub doc: Option<String>,
-    #[serde(default)]
-    pub source: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

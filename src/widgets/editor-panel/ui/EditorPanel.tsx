@@ -46,7 +46,7 @@ export function EditorPanel() {
       scrollBeyondLastLine: false,
       renderLineHighlight: 'line',
       padding: { top: 8 },
-      // Only show OUR providers (live agent + jedi). Monaco's word-based
+      // Only show our live provider. Monaco's word-based
       // suggestions otherwise pollute the list with words from the buffer text.
       wordBasedSuggestions: 'off',
       suggest: { showWords: false },

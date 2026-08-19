@@ -26,8 +26,6 @@ export const api = {
   mcpRemoveFromCodex: () => invoke<string>('mcp_remove_from_codex'),
   mcpRemoveFromClaude: () => invoke<string>('mcp_remove_from_claude'),
   defaultBufferDir: () => invoke<string>('default_buffer_dir'),
-  stubsDir: () => invoke<string>('stubs_dir'),
-  writeStubs: (stubs: Record<string, string>) => invoke<string>('write_stubs', { stubs }),
 
   detectGames: () => invoke<GameInfo[]>('detect_games'),
   inspectGameDir: (dir: string) => invoke<GameInfo | null>('inspect_game_dir', { dir }),
@@ -45,11 +43,4 @@ export const api = {
     invoke<OutFrame>('complete', { prefix, budget }),
   inspect: (expr: string) => invoke<OutFrame>('inspect', { expr }),
   lintCode: (code: string) => invoke<OutFrame>('lint_code', { code }),
-  dumpObject: (expr: string, depth = 2) => invoke<OutFrame>('dump_object', { expr, depth }),
-
-  jediStart: (python: string, script: string, root: string, sysPath: string[]) =>
-    invoke<unknown>('jedi_start', { python, script, root, sysPath }),
-  jediComplete: (code: string, line: number, column: number) =>
-    invoke<unknown>('jedi_complete', { code, line, column }),
-  jediLint: (code: string) => invoke<unknown>('jedi_lint', { code }),
 }

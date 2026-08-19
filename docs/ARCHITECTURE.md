@@ -8,8 +8,7 @@ running game client**, with code completion and linting that no existing tool
 > Dev/private use only. Injecting a loader and running arbitrary code in the client
 > is against WG ToS and detectable; hiding that is explicitly out of scope.
 
-See [`docs/PLAN.md`](docs/PLAN.md) for the full design and
-[`docs/PROTOCOL.md`](docs/PROTOCOL.md) for the wire protocol.
+See [`docs/PROTOCOL.md`](docs/PROTOCOL.md) for the wire protocol.
 
 ## Architecture
 
@@ -21,35 +20,32 @@ Desktop (Tauri 2 + React 19 + TS + Tailwind 4, FSD)
   Rust backend                                            │
     Tauri commands ─┐
                     ├─ ClientManager (one active client) ─ protocol ─ file-buffer
-    MCP Streamable  ┘           │                              │
-    HTTP /mcp            JediWorker (py2.7)            c2d / d2c + *.lock files
+    MCP Streamable  ┘                                          │
+    HTTP /mcp                                           c2d / d2c + *.lock files
                                                                │
 In-game agent (py2.7 / BigWorld)
   bw_site loader ─ capture (stdout + BigWorld.log*) ─ main-thread runner ─ handlers
 ```
 
 Three channels over one file-buffer transport: continuous **stdout/log stream**,
-**exec results** by id, and **complete / inspect / lint / dump** request/response.
-Completion and lint are two-layer: static (jedi over the decompiled source, works
-offline) merged with dynamic runtime introspection from the live game.
+**exec results** by id, and **complete / inspect / lint** request/response.
+Completion is live-only: the agent evaluates the expression base, walks its public
+members, reads typed native signatures from `__doc__`, and falls back to Python
+runtime inspection. Bounded signature and short-lived `dir()` caches keep repeated
+requests responsive. Lint uses the connected game's Python 2.7 compiler.
 
 ## Layout
 
 | Path                 | What                                                                            |
 | -------------------- | ------------------------------------------------------------------------------- |
 | `src/`               | FSD frontend (`app` / `pages` / `widgets` / `features` / `entities` / `shared`) |
-| `src-tauri/`         | Rust backend (protocol, transport, jedi supervisor, commands)                   |
+| `src-tauri/`         | Rust backend (protocol, transport, commands)                                    |
 | `mod/`               | universal `.mod` source tree, Python 2.7 builder, and agent tests               |
-| `tools/jedi_worker/` | CPython 2.7 jedi static worker (stdio JSON)                                     |
-| `docs/PLAN.md`       | full implementation plan                                                        |
 
 ## Prerequisites
 
 - Bun 1.3.14+ and Rust 1.88+ (desktop app)
-- CPython **2.7** for the in-game agent and the jedi static worker
-  (`jedi==0.17.2` + `parso 0.7.x` are the last py2-capable releases; see
-  `tools/jedi_worker/requirements.txt`). The `python27.dll` + stdlib bundled with
-  PJOrion works as that interpreter.
+- CPython **2.7** for building and testing the in-game agent.
 
 ## Develop
 

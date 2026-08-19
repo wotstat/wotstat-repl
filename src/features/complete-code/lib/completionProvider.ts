@@ -1,6 +1,5 @@
 import type * as monaco from 'monaco-editor'
 import { api, type Candidate } from '@/shared/api'
-import { extractArray } from '@/shared/lib'
 import { toMonacoCompletion } from '@/entities/completion-item'
 
 const COMPLETION_REFRESH_DELAY = 100
@@ -78,29 +77,19 @@ function completionRequest(model: monaco.editor.ITextModel, position: monaco.Pos
   return {
     word,
     prefixLine,
-    fullCode: model.getValue(),
     line: position.lineNumber,
     column: position.column - 1,
     version: model.getVersionId(),
   }
 }
 
-// Two-layer completion: live runtime (agent) merged over static (jedi). Live wins
-// on name collisions; both failures degrade to an empty list.
-async function gather(prefixLine: string, fullCode: string, line: number, column: number): Promise<Candidate[]> {
-  const [live, statc] = await Promise.allSettled([
-    api.complete(prefixLine),
-    api.jediComplete(fullCode, line, column),
-  ])
-
-  const merged = new Map<string, Candidate>()
-  if (statc.status === 'fulfilled') {
-    for (const c of extractArray<Candidate>(statc.value, 'candidates')) merged.set(c.name, { ...c, source: 'static' })
+async function gather(prefixLine: string): Promise<Candidate[]> {
+  try {
+    const response = await api.complete(prefixLine)
+    return response.type === 'complete' ? response.candidates : []
+  } catch {
+    return []
   }
-  if (live.status === 'fulfilled' && live.value.type === 'complete') {
-    for (const c of live.value.candidates) merged.set(c.name, { ...c, source: 'live' })
-  }
-  return [...merged.values()]
 }
 
 export function registerPythonCompletion(
@@ -140,11 +129,10 @@ export function registerPythonCompletion(
         if (response.type !== 'complete') return
         const candidate = response.candidates.find((c) => c.name === item.insertText)
         if (candidate) {
-          const resolved = { ...candidate, source: 'live' }
-          resolvedCandidates.set(key, resolved)
+          resolvedCandidates.set(key, candidate)
           Object.assign(
             item,
-            toMonacoCompletion(resolved, item.range as monaco.IRange),
+            toMonacoCompletion(candidate, item.range as monaco.IRange),
           )
         }
       }).catch(() => undefined)
@@ -170,9 +158,7 @@ export function registerPythonCompletion(
         && snapshot.column === request.column
         ? snapshot.candidates
         : null
-      const candidates = cached ?? await gather(
-        prefixLine, request.fullCode, request.line, request.column,
-      )
+      const candidates = cached ?? await gather(prefixLine)
       const resolvePrefix = prefixLine.slice(0, prefixLine.length - word.word.length)
       snapshot = {
         model,
@@ -291,7 +277,7 @@ export function registerPythonCompletion(
       )
       if (request.word.startColumn !== session.wordStartColumn || resolvePrefix !== session.resolvePrefix) return
 
-      void gather(request.prefixLine, request.fullCode, request.line, request.column).then((candidates) => {
+      void gather(request.prefixLine).then((candidates) => {
         const currentModel = editor.getModel()
         const currentPosition = editor.getPosition()
         if (

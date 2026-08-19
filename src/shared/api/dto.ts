@@ -5,7 +5,6 @@ export interface Candidate {
   kind?: string | null
   signature?: string | null
   doc?: string | null
-  source?: string | null
 }
 
 export interface Diagnostic {
@@ -69,4 +68,3 @@ export type OutFrame =
   | { type: 'complete'; id: string; candidates: Candidate[] }
   | { type: 'inspect'; id: string; signature?: string | null; doc?: string | null }
   | { type: 'lint'; id: string; diagnostics: Diagnostic[] }
-  | { type: 'dump'; id: string; roots: unknown; errors: unknown; stubs: Record<string, string> }

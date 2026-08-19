@@ -10,7 +10,6 @@ use serde::Serialize;
 use tokio::sync::Notify;
 
 use crate::install::{self, GameInfo};
-use crate::jedi::JediWorker;
 use crate::mcp::McpRuntime;
 use crate::process;
 use crate::protocol::{InFrame, LogLine, OutFrame, ServerEvent};
@@ -22,7 +21,6 @@ const LOG_MAX_TEXT_BYTES: usize = 4 * 1024 * 1024;
 #[derive(Default)]
 pub struct AppState {
     pub client: ClientManager,
-    pub jedi: Mutex<Option<Arc<JediWorker>>>,
     pub mcp: McpRuntime,
 }
 

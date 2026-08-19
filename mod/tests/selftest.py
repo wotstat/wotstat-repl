@@ -36,8 +36,8 @@ def main():
         assert replies["2"]["type"] == "lint", replies["2"]
         assert any(c["name"].startswith("in") for c in replies["3"]["candidates"]), replies["3"]
 
-        # py2.7 SyntaxError on "print x" only when this runs under py2; under py3
-        # the static lint still returns a well-formed (possibly empty) frame.
+        # py2.7 accepts "print x"; py3 reports it as a syntax error. Either way,
+        # the live lint handler returns a well-formed diagnostics list.
         print("OK  exec->%s  lint->%d diag  complete->%d cand" % (
             replies["1"]["repr"],
             len(replies["2"]["diagnostics"]),

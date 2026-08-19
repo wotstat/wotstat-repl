@@ -1,5 +1,0 @@
-# Install under CPython 2.7 only. jedi 0.17.2 is the last py2-capable release;
-# 0.18+ requires Python 3.6+. parso must stay <0.8 to keep the 2.7 grammar.
-jedi==0.17.2
-parso==0.7.1
-pyflakes==2.2.0

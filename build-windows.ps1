@@ -27,7 +27,7 @@ try {
     $mod = 'src-tauri/resources/wotstat.repl.mod'
     Remove-Item $mod -Force -ErrorAction SilentlyContinue
 
-    foreach ($test in @('test_exec.py', 'selftest.py', 'itest.py', 'test_complete.py', 'test_dump.py')) {
+    foreach ($test in @('test_exec.py', 'selftest.py', 'itest.py', 'test_complete.py')) {
         & $python "mod/tests/$test"
         if ($LASTEXITCODE -ne 0) { throw "Agent test failed: $test" }
     }

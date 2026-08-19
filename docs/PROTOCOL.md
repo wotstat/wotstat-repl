@@ -24,7 +24,6 @@ per line.
 { "id": "<uuid>", "type": "complete","prefix": "BigWorld.pla", "budget": 120 }
 { "id": "<uuid>", "type": "inspect", "expr": "BigWorld.player()" }
 { "id": "<uuid>", "type": "lint",    "code": "print x" }
-{ "id": "<uuid>", "type": "dump",    "expr": "BigWorld.player()", "depth": 3 }
 ```
 
 `complete.budget` is optional for older clients and defaults to `120`; it limits
@@ -39,10 +38,9 @@ how many live candidates are inspected for kind, documentation, and signatures.
 { "type": "disconnected" }
 // correlated by id
 { "id": "<uuid>", "type": "result",  "ok": true, "repr": "<Avatar>", "exc": null, "stdout": "printed output\n", "stderr": "" }
-{ "id": "<uuid>", "type": "complete", "candidates": [{"name":"player","source":"live"}] }
+{ "id": "<uuid>", "type": "complete", "candidates": [{"name":"player","kind":"function","signature":"() -> Avatar"}] }
 { "id": "<uuid>", "type": "inspect",  "signature": "player()", "doc": "..." }
 { "id": "<uuid>", "type": "lint",     "diagnostics": [{"line":1,"col":1,"severity":"error","message":"..."}] }
-{ "id": "<uuid>", "type": "dump",     "roots": [ ... ], "errors": [ ... ], "stubs": { "Avatar": "<.pyi text>" } }
 ```
 
 `result.stdout` and `result.stderr` contain output correlated to that `exec`
@@ -52,7 +50,7 @@ missing value as an empty string.
 
 ## Threading
 
-`exec`, `complete`, `inspect`, `dump` run on the game **main thread** via
+`exec`, `complete`, and `inspect` run on the game **main thread** via
 `BigWorld.callback(0, ...)`. `lint` is pure and runs on the agent poll thread.
 Captured stdout/log is queued on the game thread and shipped by the poll thread.
 

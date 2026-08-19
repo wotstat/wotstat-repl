@@ -31,7 +31,7 @@ The [latest release](https://github.com/wotstat/wotstat-repl/releases/latest) pr
 3. The application installs the agent into the selected client's `mods/<version>` directory, starts the game, and waits for the **Connected** status. If the game is already running and the agent was installed previously, click **Connect**.
 4. Enter code in the editor and press `Ctrl/Cmd+Enter`. The selection is executed, or the entire editor when nothing is selected. Results and logs appear in the console on the right.
 
-After connecting, the application automatically inspects the available client types and saves generated stubs in `%LOCALAPPDATA%\WotStatWoTREPL\stubs`. A separate Python 2.7 Jedi worker performs static analysis of the game sources; its protocol and configuration are described in [`tools/jedi_worker/README.md`](tools/jedi_worker/README.md).
+Autocomplete comes directly from the connected client. The in-game agent walks live objects with `dir()`/`getattr()`, reads typed native signatures from `__doc__`, and falls back to Python runtime inspection for regular functions and bound methods. Results are cached with bounded, short-lived caches to keep repeated completion responsive.
 
 ## MCP
 
@@ -66,6 +66,5 @@ The server exposes six tools:
 
 - [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — application components and their interactions.
 - [`docs/PROTOCOL.md`](docs/PROTOCOL.md) — file-based protocol between the application and the in-game agent.
-- [`docs/PLAN.md`](docs/PLAN.md) — the original implementation plan and project boundaries.
 
 The main code lives in `src/` (React/TypeScript, Feature-Sliced Design), `src-tauri/` (Tauri/Rust), and `mod/` (the Python 2.7 agent and its tests).
