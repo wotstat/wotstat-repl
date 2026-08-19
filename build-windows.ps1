@@ -2,7 +2,7 @@ param([string]$Version)
 
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path
-$tauriConfig = Join-Path ([IO.Path]::GetTempPath()) "fuflo-wot-repl-$PID.json"
+$tauriConfig = Join-Path ([IO.Path]::GetTempPath()) "wotstat-repl-$PID.json"
 
 Push-Location $root
 try {
@@ -27,7 +27,7 @@ try {
         if ($LASTEXITCODE -ne 0) { throw 'npm dependency install failed' }
     }
 
-    $mod = 'src-tauri/resources/me.fuflo.wotrepl.mod'
+    $mod = 'src-tauri/resources/wotstat.repl.mod'
     Remove-Item $mod -Force -ErrorAction SilentlyContinue
 
     foreach ($test in @('test_exec.py', 'selftest.py', 'itest.py', 'test_complete.py', 'test_dump.py')) {

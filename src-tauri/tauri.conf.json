@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Fuflo WoT REPL",
+  "productName": "WotStat WoT REPL",
   "version": "0.4.0",
-  "identifier": "me.fuflo.wotrepl",
+  "identifier": "info.wotstat.wotrepl",
   "build": {
     "frontendDist": "../dist",
     "devUrl": "http://localhost:1420",
@@ -13,7 +13,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "Fuflo WoT REPL",
+        "title": "WotStat WoT REPL",
         "width": 1280,
         "height": 800,
         "minWidth": 960,

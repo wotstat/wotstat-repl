@@ -19,7 +19,7 @@ def build(version, output):
     if sys.version_info[:2] != (2, 7):
         raise SystemExit('Python 2.7 is required (got %s)' % sys.version.split()[0])
 
-    work = tempfile.mkdtemp(prefix='fuflo-wotrepl-mod-')
+    work = tempfile.mkdtemp(prefix='wotstat-repl-mod-')
     try:
         staged_res = os.path.join(work, 'res')
         shutil.copytree(
@@ -105,7 +105,7 @@ def _verify(output, version):
 
 
 def main():
-    parser = argparse.ArgumentParser(description='Build the universal Fuflo WoT REPL .mod')
+    parser = argparse.ArgumentParser(description='Build the universal WotStat WoT REPL .mod')
     parser.add_argument('--version', required=True)
     parser.add_argument('--out', required=True)
     args = parser.parse_args()

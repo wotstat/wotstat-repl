@@ -1,4 +1,4 @@
-"""Fuflo WoT REPL in-game agent (Python 2.7 / BigWorld).
+"""WotStat WoT REPL in-game agent (Python 2.7 / BigWorld).
 
 Loaded inside the running WoT client by the bw_site loader. Exposes a tiny
 file-buffer RPC the desktop app drives: it streams captured stdout/log output

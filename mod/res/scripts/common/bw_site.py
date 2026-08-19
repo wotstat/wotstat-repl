@@ -1,4 +1,4 @@
-# Fuflo WoT REPL early loader (Python 2.7 / BigWorld).
+# WotStat WoT REPL early loader (Python 2.7 / BigWorld).
 #
 # Installed as scripts/common/bw_site.py via the .mtmod res overlay, so it loads
 # at site-init time (the earliest point, like PJOrion) and its stdout/BigWorld.log
@@ -10,11 +10,11 @@ import os
 try:
     import wms_agent
     _base = os.environ.get('LOCALAPPDATA') or os.environ.get('APPDATA') or os.getcwd()
-    wms_agent.start(os.path.join(_base, 'FufloWoTREPL', 'buffer'))
-    print 'Fuflo WoT REPL: agent started'
+    wms_agent.start(os.path.join(_base, 'WotStatWoTREPL', 'buffer'))
+    print 'WotStat WoT REPL: agent started'
 except Exception:
     import traceback
-    print 'Fuflo WoT REPL: agent failed to start'
+    print 'WotStat WoT REPL: agent failed to start'
     print traceback.format_exc()
 
 # Defer to the original bw_site.pyc shipped inside the game's script package.
@@ -33,7 +33,7 @@ try:
     exec _original in globals()
 except Exception:
     import traceback
-    print 'Fuflo WoT REPL: original bw_site load failed'
+    print 'WotStat WoT REPL: original bw_site load failed'
     print traceback.format_exc()
 
 # Preserve the game's shutdown hook while letting the agent tell the desktop

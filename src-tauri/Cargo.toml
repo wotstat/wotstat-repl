@@ -1,13 +1,13 @@
 [package]
-name = "wot-mod-studio"
+name = "wotstat-repl"
 version = "0.4.0"
-description = "Desktop IDE for World of Tanks Python mod development"
-authors = ["you"]
+description = "WotStat desktop IDE for World of Tanks Python mod development"
+authors = ["WotStat"]
 edition = "2021"
 rust-version = "1.88"
 
 [lib]
-name = "wot_mod_studio_lib"
+name = "wotstat_repl_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]

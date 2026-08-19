@@ -1,4 +1,4 @@
-# Fuflo WoT REPL
+# WotStat WoT REPL
 
 A desktop IDE for World of Tanks Python mod development: a **live REPL into the
 running game client**, with code completion and linting that no existing tool
@@ -64,7 +64,7 @@ npm run lint:fsd       # steiger FSD boundary check
 
 The app includes an MCP Streamable HTTP server. It binds to `0.0.0.0:8765`; its
 stable local URL is `http://127.0.0.1:8765/mcp?token=<persistent-uuid>`. On first
-use it creates `%LOCALAPPDATA%/FufloWoTREPL/mcp.json`; the UUID token is generated
+use it creates `%LOCALAPPDATA%/WotStatWoTREPL/mcp.json`; the UUID token is generated
 once and retained when the server is enabled or disabled.
 
 Click the **MCP** badge in the lower status bar to inspect server status, enable or

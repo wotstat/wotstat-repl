@@ -1,4 +1,4 @@
-export const APP_NAME = 'Fuflo WoT REPL'
+export const APP_NAME = 'WotStat WoT REPL'
 export const DEV_SERVER_PORT = 1420
 export const COMPLETION_BUDGET_STORAGE_KEY = 'completion.budget'
 export const DEFAULT_COMPLETION_BUDGET = 120

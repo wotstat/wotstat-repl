@@ -25,7 +25,7 @@ py -2.7 -m pip install -r requirements.txt
  "sys_path":["U:/Programs/wot-src/sources/res/scripts/common",
              "U:/Programs/wot-src/sources/res/scripts/client",
              "U:/Programs/wot-src/sources/res/scripts/client_common",
-             "%LOCALAPPDATA%/FufloWoTREPL/stubs"]}
+             "%LOCALAPPDATA%/WotStatWoTREPL/stubs"]}
 ```
 
 The last root is the canonical stubs dir (Rust `stubs_dir` command / `install::stubs_dir_path`).

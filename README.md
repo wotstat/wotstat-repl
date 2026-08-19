@@ -1,10 +1,10 @@
 ### | EN | [RU](./README_RU.md) |
 
-# Fuflo WoT REPL
+# WotStat WoT REPL
 
 A desktop application for developing mods for **World of Tanks** and **Mir Tankov**. It connects to a running client, executes Python 2.7 code on the game thread, and displays live output.
 
-![Fuflo WoT REPL window](./docs/img/hero.png)
+![App window](./docs/img/hero.png)
 
 ## Features
 
@@ -19,7 +19,7 @@ A desktop application for developing mods for **World of Tanks** and **Mir Tanko
 
 ## Installation
 
-[Download](https://github.com/Newmcpe/fuflo-wot-repl/releases/latest) and install the latest installer from the GitHub releases.
+[Download](https://github.com/wotstat/wotstat-repl/releases/latest) and install the latest installer from the GitHub releases.
 
 ## Usage
 
@@ -28,7 +28,7 @@ A desktop application for developing mods for **World of Tanks** and **Mir Tanko
 3. The application installs the agent into the selected client's `mods/<version>` directory, starts the game, and waits for the **Connected** status. If the game is already running and the agent was installed previously, click **Connect**.
 4. Enter code in the editor and press `Ctrl/Cmd+Enter`. The selection is executed, or the entire editor when nothing is selected. Results and logs appear in the console on the right.
 
-After connecting, the application automatically inspects the available client types and saves generated stubs in `%LOCALAPPDATA%\FufloWoTREPL\stubs`. A separate Python 2.7 Jedi worker performs static analysis of the game sources; its protocol and configuration are described in [`tools/jedi_worker/README.md`](tools/jedi_worker/README.md).
+After connecting, the application automatically inspects the available client types and saves generated stubs in `%LOCALAPPDATA%\WotStatWoTREPL\stubs`. A separate Python 2.7 Jedi worker performs static analysis of the game sources; its protocol and configuration are described in [`tools/jedi_worker/README.md`](tools/jedi_worker/README.md).
 
 ## MCP
 
@@ -38,7 +38,7 @@ On first launch, the application creates and enables a local Streamable HTTP MCP
 http://127.0.0.1:8765/mcp?token=<persistent-UUID>
 ```
 
-The token and server state are stored in `%LOCALAPPDATA%\FufloWoTREPL\mcp.json`. Click **MCP** in the status bar to enable or disable the server, copy a local or network URL, or add the `wot_repl` configuration to Codex or Claude Code. The corresponding CLI must be available on `PATH` for the add buttons to work.
+The token and server state are stored in `%LOCALAPPDATA%\WotStatWoTREPL\mcp.json`. Click **MCP** in the status bar to enable or disable the server, copy a local or network URL, or add the `wot_repl` configuration to Codex or Claude Code. The corresponding CLI must be available on `PATH` for the add buttons to work.
 
 To add the server to Codex manually:
 

@@ -2,5 +2,5 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 fn main() {
-    wot_mod_studio_lib::run();
+    wotstat_repl_lib::run();
 }

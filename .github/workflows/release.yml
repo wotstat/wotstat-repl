@@ -40,7 +40,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           tag_name: ${{ github.ref_name }}
-          name: Fuflo WoT REPL ${{ github.ref_name }}
+          name: WotStat WoT REPL ${{ github.ref_name }}
           body: |
             Windows installers (`.msi` and `.exe`) are attached below.
 

@@ -1,4 +1,4 @@
-const PREFIX = 'fuflo.'
+const PREFIX = 'wotstat.'
 
 export function loadState<T>(key: string, fallback: T): T {
   try {

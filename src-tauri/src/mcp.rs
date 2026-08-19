@@ -742,8 +742,8 @@ fn tool_error(error: impl Into<String>) -> CallToolResult {
 impl ServerHandler for WotMcpServer {
     fn get_info(&self) -> ServerInfo {
         ServerInfo::new(ServerCapabilities::builder().enable_tools().build()).with_server_info(
-            Implementation::new("fuflo-wot-repl", env!("CARGO_PKG_VERSION"))
-                .with_title("Fuflo World of Tanks REPL")
+            Implementation::new("wotstat-repl", env!("CARGO_PKG_VERSION"))
+                .with_title("WotStat World of Tanks REPL")
                 .with_description(
                     "A development MCP server for controlling a local World of Tanks client and executing Python 2.7 code inside the running game.",
                 ),
@@ -930,11 +930,11 @@ mod tests {
         let initialized_body = json_body(&initialized);
         assert_eq!(
             initialized_body["result"]["serverInfo"]["name"],
-            "fuflo-wot-repl"
+            "wotstat-repl"
         );
         assert_eq!(
             initialized_body["result"]["serverInfo"]["title"],
-            "Fuflo World of Tanks REPL"
+            "WotStat World of Tanks REPL"
         );
         let description = initialized_body["result"]["serverInfo"]["description"]
             .as_str()
