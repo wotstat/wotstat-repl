@@ -41,12 +41,15 @@ jobs:
           tag_name: ${{ github.ref_name }}
           name: WotStat WoT REPL ${{ github.ref_name }}
           body: |
-            Windows installers (`.msi` and `.exe`) are attached below.
+            Windows downloads:
+
+            - `wotstat-repl.exe` runs directly without installation. On a standard Windows 10/11 system, this is all you need.
+            - `*-setup.exe` installs the app and ensures that the WebView2 runtime is available.
 
             Dev/private use only — see the README.
           draft: true
           prerelease: false
           fail_on_unmatched_files: true
           files: |
-            src-tauri/target/release/bundle/msi/*.msi
+            src-tauri/target/release/wotstat-repl.exe
             src-tauri/target/release/bundle/nsis/*-setup.exe

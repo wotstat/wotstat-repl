@@ -19,7 +19,10 @@ A desktop application for developing mods for **World of Tanks** and **Mir Tanko
 
 ## Installation
 
-[Download](https://github.com/wotstat/wotstat-repl/releases/latest) and install the latest installer from the GitHub releases.
+The [latest release](https://github.com/wotstat/wotstat-repl/releases/latest) provides two Windows downloads:
+
+- `wotstat-repl.exe` — the ready-to-run application with no installation required. On a standard, unmodified Windows 10/11 system, download it and run it directly.
+- `*-setup.exe` — an installer with shortcuts and standard uninstall support. Use it if Microsoft Edge WebView2 is missing from the system or if you prefer a regular installation.
 
 ## Usage
 

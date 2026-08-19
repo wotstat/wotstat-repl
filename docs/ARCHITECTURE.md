@@ -104,6 +104,6 @@ development/VM network.
 
 Without `-Version`, the version comes from `package.json`; an explicit version
 may include the Git tag's `v` prefix. The same version is used for the universal `.mod`
-and Tauri installers. The script also runs the Python 2.7 agent and Rust tests,
-checks FSD boundaries, and produces the final Windows installers. The release
-workflow calls the same script from a clean checkout.
+and Tauri application. The script also runs the Python 2.7 agent and Rust tests,
+checks FSD boundaries, and produces `wotstat-repl.exe` plus the NSIS installer.
+The release workflow calls the same script from a clean checkout.
