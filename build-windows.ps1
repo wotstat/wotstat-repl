@@ -8,7 +8,7 @@ Push-Location $root
 try {
     $packageVersion = (Get-Content package.json | ConvertFrom-Json).version
     if ($Version) {
-        $Version = $Version -replace '^v', ''
+        $Version = $Version.Trim()
     } else {
         $Version = $packageVersion
     }
