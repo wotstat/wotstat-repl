@@ -108,6 +108,10 @@ jobs:
           workspaces: src-tauri
           key: ${{ matrix.platform }}
 
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
       - run: bun install --frozen-lockfile
 
       - name: Test desktop backend

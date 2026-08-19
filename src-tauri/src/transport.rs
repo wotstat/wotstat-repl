@@ -21,6 +21,8 @@ use std::time::{Duration, Instant};
 use hmac::{Hmac, Mac};
 use serde::{Deserialize, Serialize};
 use sha2::Sha256;
+#[cfg(unix)]
+use socket2::{Domain, Protocol, Socket, Type};
 
 use crate::protocol::{InFrame, LogLine, OutFrame, ServerEvent};
 
@@ -286,6 +288,8 @@ pub struct NetworkTransport {
     secure_enabled: bool,
     server_id: String,
     tcp_port: u16,
+    #[cfg(test)]
+    discovery_port: Option<u16>,
     writer: Mutex<Option<ActiveWriter>>,
     next_connection_id: AtomicU64,
     delivery: Mutex<DeliveryCursor>,
@@ -320,7 +324,7 @@ impl NetworkTransport {
         udp_address: Option<SocketAddr>,
         sink: EventSink,
     ) -> Result<Arc<Self>, String> {
-        let listener = TcpListener::bind(tcp_address)
+        let listener = bind_tcp_listener(tcp_address)
             .map_err(|error| format!("cannot bind agent TCP listener on {tcp_address}: {error}"))?;
         listener
             .set_nonblocking(true)
@@ -341,6 +345,13 @@ impl NetworkTransport {
             }
             None => None,
         };
+        #[cfg(test)]
+        let discovery_port = discovery
+            .as_ref()
+            .map(UdpSocket::local_addr)
+            .transpose()
+            .map_err(|error| error.to_string())?
+            .map(|address| address.port());
 
         let transport = Arc::new(Self {
             pending: Mutex::new(HashMap::new()),
@@ -350,6 +361,8 @@ impl NetworkTransport {
             secure_enabled,
             server_id: uuid::Uuid::new_v4().to_string(),
             tcp_port,
+            #[cfg(test)]
+            discovery_port,
             writer: Mutex::new(None),
             next_connection_id: AtomicU64::new(1),
             delivery: Mutex::new(DeliveryCursor::default()),
@@ -380,11 +393,12 @@ impl NetworkTransport {
         if let Ok(mut pending) = self.pending.lock() {
             pending.clear();
         }
-        // Wake the nonblocking accept loop and wait until both bound sockets are
-        // dropped, so an immediate reconnect can bind the same ports reliably.
-        let _ = TcpStream::connect((Ipv4Addr::LOCALHOST, self.tcp_port));
+        // Wake the nonblocking accept loop without opening a loopback
+        // connection, then wait until the listener is dropped. A TCP wake-up
+        // consumes an ephemeral port and can race an immediate rebind.
         if let Ok(mut thread) = self.accept_thread.lock() {
             if let Some(thread) = thread.take() {
+                thread.thread().unpark();
                 let _ = thread.join();
             }
         }
@@ -418,11 +432,11 @@ impl NetworkTransport {
                     });
                 }
                 Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
-                    thread::sleep(ACCEPT_POLL);
+                    thread::park_timeout(ACCEPT_POLL);
                 }
                 Err(error) => {
                     log::error!("agent TCP accept failed: {error}");
-                    thread::sleep(ACCEPT_POLL);
+                    thread::park_timeout(ACCEPT_POLL);
                 }
             }
         }
@@ -766,6 +780,25 @@ impl NetworkTransport {
     }
 }
 
+fn bind_tcp_listener(address: SocketAddr) -> io::Result<TcpListener> {
+    #[cfg(unix)]
+    {
+        let socket = Socket::new(
+            Domain::for_address(address),
+            Type::STREAM,
+            Some(Protocol::TCP),
+        )?;
+        socket.set_reuse_address(true)?;
+        socket.bind(&address.into())?;
+        socket.listen(128)?;
+        Ok(socket.into())
+    }
+    #[cfg(not(unix))]
+    {
+        TcpListener::bind(address)
+    }
+}
+
 fn write_json_line<T: Serialize>(stream: &mut TcpStream, value: &T) -> io::Result<()> {
     let mut body = serde_json::to_vec(value).map_err(io::Error::other)?;
     if body.len() > MAX_FRAME_BYTES {
@@ -853,7 +886,7 @@ fn verify_proof(token: &str, parts: &[&str], candidate: &str) -> bool {
 mod tests {
     use super::*;
     use crate::protocol::InFrame;
-    use std::process::Command;
+    use std::process::{Child, Command, Stdio};
     use std::sync::mpsc::RecvTimeoutError;
 
     const TOKEN: &str = "00000000-0000-4000-8000-000000000001";
@@ -928,12 +961,82 @@ mod tests {
                 return Some(candidate.to_string());
             }
         }
-        Command::new("python3")
-            .arg("--version")
-            .output()
-            .ok()
-            .filter(|output| output.status.success())
-            .map(|_| "python3".to_string())
+        let candidates = if cfg!(windows) {
+            ["python", "python3"]
+        } else {
+            ["python3", "python"]
+        };
+        candidates.into_iter().find_map(|candidate| {
+            Command::new(candidate)
+                .arg("--version")
+                .output()
+                .ok()
+                .filter(|output| output.status.success())
+                .map(|_| candidate.to_string())
+        })
+    }
+
+    fn child_diagnostics(child: &mut Child) -> String {
+        let status = match child.try_wait() {
+            Ok(Some(status)) => status.to_string(),
+            Ok(None) => {
+                let _ = child.kill();
+                child
+                    .wait()
+                    .map(|status| format!("{status} (killed after timeout)"))
+                    .unwrap_or_else(|error| format!("unknown after kill: {error}"))
+            }
+            Err(error) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                format!("unknown after process inspection failed: {error}")
+            }
+        };
+        let mut stdout = String::new();
+        if let Some(mut pipe) = child.stdout.take() {
+            let _ = pipe.read_to_string(&mut stdout);
+        }
+        let mut stderr = String::new();
+        if let Some(mut pipe) = child.stderr.take() {
+            let _ = pipe.read_to_string(&mut stderr);
+        }
+        format!(
+            "status={status}, stdout={:?}, stderr={:?}",
+            stdout.trim(),
+            stderr.trim()
+        )
+    }
+
+    fn wait_for_python_hello(
+        events: &Mutex<Vec<ServerEvent>>,
+        child: &mut Child,
+        interpreter: &str,
+    ) {
+        let deadline = Instant::now() + Duration::from_secs(15);
+        while Instant::now() < deadline {
+            if events
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|event| matches!(event, ServerEvent::Hello { .. }))
+            {
+                return;
+            }
+            match child.try_wait() {
+                Ok(Some(_)) => {
+                    let diagnostics = child_diagnostics(child);
+                    panic!("Python agent ({interpreter}) exited before hello: {diagnostics}");
+                }
+                Ok(None) => {}
+                Err(error) => {
+                    let diagnostics = child_diagnostics(child);
+                    panic!("cannot inspect Python agent ({interpreter}): {error}; {diagnostics}");
+                }
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+        let diagnostics = child_diagnostics(child);
+        panic!("Python agent ({interpreter}) did not send hello: {diagnostics}");
     }
 
     #[test]
@@ -1166,18 +1269,17 @@ mod tests {
 
     #[test]
     fn authenticated_udp_discovery_returns_the_tcp_endpoint() {
-        let probe = UdpSocket::bind("127.0.0.1:0").unwrap();
-        let discovery_address = probe.local_addr().unwrap();
-        drop(probe);
         let events = Arc::new(Mutex::new(Vec::new()));
         let transport = NetworkTransport::start_with_addresses(
             TOKEN.to_string(),
             true,
             "127.0.0.1:0".parse().unwrap(),
-            Some(discovery_address),
+            Some("127.0.0.1:0".parse().unwrap()),
             Arc::new(move |event| events.lock().unwrap().push(event)),
         )
         .unwrap();
+        let discovery_address =
+            SocketAddr::from((Ipv4Addr::LOCALHOST, transport.discovery_port.unwrap()));
         let client = UdpSocket::bind("127.0.0.1:0").unwrap();
         client
             .set_read_timeout(Some(Duration::from_secs(1)))
@@ -1206,18 +1308,17 @@ mod tests {
 
     #[test]
     fn anonymous_udp_discovery_is_answered_only_when_token_is_not_required() {
-        let probe = UdpSocket::bind("127.0.0.1:0").unwrap();
-        let discovery_address = probe.local_addr().unwrap();
-        drop(probe);
         let events = Arc::new(Mutex::new(Vec::new()));
         let transport = NetworkTransport::start_with_addresses(
             TOKEN.to_string(),
             false,
             "127.0.0.1:0".parse().unwrap(),
-            Some(discovery_address),
+            Some("127.0.0.1:0".parse().unwrap()),
             Arc::new(move |event| events.lock().unwrap().push(event)),
         )
         .unwrap();
+        let discovery_address =
+            SocketAddr::from((Ipv4Addr::LOCALHOST, transport.discovery_port.unwrap()));
         let client = UdpSocket::bind("127.0.0.1:0").unwrap();
         client
             .set_read_timeout(Some(Duration::from_secs(1)))
@@ -1241,23 +1342,38 @@ mod tests {
     }
 
     #[test]
-    fn stop_releases_the_listener_for_immediate_reconnect() {
-        let probe = TcpListener::bind("127.0.0.1:0").unwrap();
-        let address = probe.local_addr().unwrap();
-        drop(probe);
+    fn stop_releases_the_listener_for_reconnect() {
         let sink: EventSink = Arc::new(|_| {});
-        let first = NetworkTransport::start_with_addresses(
-            TOKEN.to_string(),
-            true,
-            address,
-            None,
-            Arc::clone(&sink),
-        )
-        .unwrap();
+        let first = (30_000..30_100)
+            .find_map(|port| {
+                NetworkTransport::start_with_addresses(
+                    TOKEN.to_string(),
+                    true,
+                    SocketAddr::from((Ipv4Addr::LOCALHOST, port)),
+                    None,
+                    Arc::clone(&sink),
+                )
+                .ok()
+            })
+            .expect("no free TCP port in the test range");
+        let address = SocketAddr::from((Ipv4Addr::LOCALHOST, first.tcp_port));
         first.stop();
-        let second =
-            NetworkTransport::start_with_addresses(TOKEN.to_string(), true, address, None, sink)
-                .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(1);
+        let second = loop {
+            match NetworkTransport::start_with_addresses(
+                TOKEN.to_string(),
+                true,
+                address,
+                None,
+                Arc::clone(&sink),
+            ) {
+                Ok(transport) => break transport,
+                Err(_) if Instant::now() < deadline => {
+                    thread::sleep(Duration::from_millis(5));
+                }
+                Err(error) => panic!("listener was not released for reconnect: {error}"),
+            }
+        };
         second.stop();
     }
 
@@ -1287,27 +1403,15 @@ mod tests {
             env!("CARGO_MANIFEST_DIR"),
             "/../mod/tests/run_standalone.py"
         );
-        let mut child = Command::new(python)
+        let mut child = Command::new(&python)
             .arg(runner)
             .arg(&config_dir)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
             .spawn()
             .expect("spawn real Python agent");
 
-        let deadline = Instant::now() + Duration::from_secs(5);
-        while Instant::now() < deadline
-            && !events
-                .lock()
-                .unwrap()
-                .iter()
-                .any(|event| matches!(event, ServerEvent::Hello { .. }))
-        {
-            thread::sleep(Duration::from_millis(10));
-        }
-        assert!(events
-            .lock()
-            .unwrap()
-            .iter()
-            .any(|event| matches!(event, ServerEvent::Hello { .. })));
+        wait_for_python_hello(&events, &mut child, &python);
 
         let reply = transport
             .request(InFrame::Exec {
@@ -1356,27 +1460,15 @@ mod tests {
             env!("CARGO_MANIFEST_DIR"),
             "/../mod/tests/run_standalone.py"
         );
-        let mut child = Command::new(python)
+        let mut child = Command::new(&python)
             .arg(runner)
             .arg(&config_dir)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
             .spawn()
             .expect("spawn anonymous Python agent");
 
-        let deadline = Instant::now() + Duration::from_secs(5);
-        while Instant::now() < deadline
-            && !events
-                .lock()
-                .unwrap()
-                .iter()
-                .any(|event| matches!(event, ServerEvent::Hello { .. }))
-        {
-            thread::sleep(Duration::from_millis(10));
-        }
-        assert!(events
-            .lock()
-            .unwrap()
-            .iter()
-            .any(|event| matches!(event, ServerEvent::Hello { .. })));
+        wait_for_python_hello(&events, &mut child, &python);
 
         let reply = transport
             .request(InFrame::Exec {

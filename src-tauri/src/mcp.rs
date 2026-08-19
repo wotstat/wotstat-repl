@@ -1063,7 +1063,16 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(stopped_again.status, McpStatus::Disabled);
-        let rebound = tokio::net::TcpListener::bind(address).await.unwrap();
+        let release_deadline = Instant::now() + Duration::from_secs(1);
+        let rebound = loop {
+            match tokio::net::TcpListener::bind(address).await {
+                Ok(listener) => break listener,
+                Err(_) if Instant::now() < release_deadline => {
+                    tokio::time::sleep(Duration::from_millis(5)).await;
+                }
+                Err(error) => panic!("MCP listener was not released: {error}"),
+            }
+        };
         drop(rebound);
 
         let restarted = runtime
