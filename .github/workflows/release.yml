@@ -44,10 +44,10 @@ jobs:
             Windows downloads:
 
             - `wotstat-repl.exe` runs directly without installation. On a standard Windows 10/11 system, this is all you need.
-            - `wotstat-repl-setup.exe` installs the app and ensures that the WebView2 runtime is available.
+            - `wotstat-repl_${{ github.ref_name }}_x64-setup.exe` installs the app and ensures that the WebView2 runtime is available.
           draft: true
           prerelease: false
           fail_on_unmatched_files: true
           files: |
             src-tauri/target/release/wotstat-repl.exe
-            src-tauri/target/release/bundle/nsis/wotstat-repl-setup.exe
+            src-tauri/target/release/bundle/nsis/wotstat-repl_${{ github.ref_name }}_x64-setup.exe
