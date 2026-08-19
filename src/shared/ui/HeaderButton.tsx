@@ -4,7 +4,7 @@ export function HeaderButton({ className = '', ...props }: ButtonHTMLAttributes<
   return (
     <button
       type="button"
-      className={`h-6 rounded border border-edge px-2 text-[11px] text-muted transition-colors hover:border-live hover:text-fg disabled:opacity-40 ${className}`}
+      className={`h-6 rounded border border-edge px-2 text-[11px] text-fg transition-colors hover:border-live disabled:opacity-40 ${className}`}
       {...props}
     />
   )

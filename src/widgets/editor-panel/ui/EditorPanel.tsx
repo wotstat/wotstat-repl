@@ -126,7 +126,7 @@ export function EditorPanel() {
           onClick={() => runEditor(editorRef.current)}
           disabled={!connected}
           title="Run selection or buffer (Ctrl/Cmd+Enter)"
-          className="border-live/40 text-fg"
+          className="border-live/40"
         >
           ▶ Run
         </HeaderButton>
