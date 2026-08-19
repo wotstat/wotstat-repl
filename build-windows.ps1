@@ -45,6 +45,9 @@ try {
         Set-Content $tauriConfig -Encoding ASCII
     bun run tauri build --config $tauriConfig
     if ($LASTEXITCODE -ne 0) { throw 'Tauri build failed' }
+
+    $installer = "src-tauri/target/release/bundle/nsis/WotStat.WoT.REPL_${Version}_x64-setup.exe"
+    Move-Item $installer (Split-Path $installer | Join-Path -ChildPath 'wotstat-repl-setup.exe') -Force
 } finally {
     Remove-Item $tauriConfig -Force -ErrorAction SilentlyContinue
     Pop-Location
