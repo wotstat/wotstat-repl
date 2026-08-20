@@ -1,6 +1,7 @@
 import { useRef, useState, type KeyboardEvent, type PointerEvent } from 'react'
 import { EditorPanel } from '@/widgets/editor-panel'
 import { LogConsole } from '@/widgets/log-console'
+import { beginSeparatorResize } from './resizeSeparator'
 
 export function ReplWorkspace() {
   const workspace = useRef<HTMLElement>(null)
@@ -20,7 +21,7 @@ export function ReplWorkspace() {
   }
 
   const onPointerDown = (event: PointerEvent<HTMLDivElement>) => {
-    event.currentTarget.setPointerCapture(event.pointerId)
+    beginSeparatorResize(event)
     resize(verticalLayout ? event.clientY : event.clientX)
   }
 
