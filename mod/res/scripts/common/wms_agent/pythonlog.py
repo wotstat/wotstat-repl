@@ -25,6 +25,7 @@ _STARTUP_WINDOW_SECONDS = 3 * 60
 _STARTUP_SCAN_BYTES = 8 * 1024 * 1024
 _STARTUP_SCAN_CHUNK = 64 * 1024
 _HEADER_OVERLAP_BYTES = 1024
+_ROTATION_PROBE_BYTES = 256
 
 
 def _decode(raw):
@@ -127,37 +128,54 @@ class PythonLogTail(object):
         self._identity = None
         self._offset = 0
         self._pending = b''
+        self._rotation_probe = b''
         self._skip_until_newline = False
         self._snapshot_existing_file()
 
     def _snapshot_existing_file(self):
         """Start at the current game banner, or EOF when none is recent."""
         try:
-            stat = os.stat(self._path)
+            handle = open(self._path, 'rb')
         except (IOError, OSError):
             return
 
-        self._identity = _file_identity(stat)
-        self._offset = stat.st_size
-        if not stat.st_size:
-            return
-
         try:
-            handle = open(self._path, 'rb')
             try:
+                stat = os.fstat(handle.fileno())
+                self._identity = _file_identity(stat)
+                self._offset = stat.st_size
+                if not stat.st_size:
+                    return
+
                 game_start = _recent_game_start(
                     handle, stat.st_size, time.time())
                 if game_start is not None:
                     self._offset = game_start
-                    return
-                handle.seek(stat.st_size - 1)
-                self._skip_until_newline = handle.read(1) not in (b'\n', b'\r')
+                else:
+                    handle.seek(stat.st_size - 1)
+                    self._skip_until_newline = handle.read(1) not in (
+                        b'\n', b'\r')
+                self._remember_rotation_probe(handle)
             finally:
                 handle.close()
         except (IOError, OSError):
             # Avoid emitting an arbitrary tail fragment if the last-byte probe
             # races with the game replacing the file.
             self._skip_until_newline = True
+
+    def _remember_rotation_probe(self, handle):
+        size = min(self._offset, _ROTATION_PROBE_BYTES)
+        if not size:
+            self._rotation_probe = b''
+            return
+        handle.seek(self._offset - size)
+        self._rotation_probe = handle.read(size)
+
+    def _rotation_probe_changed(self, handle):
+        if not self._rotation_probe:
+            return False
+        handle.seek(self._offset - len(self._rotation_probe))
+        return handle.read(len(self._rotation_probe)) != self._rotation_probe
 
     def poll(self, now=None):
         current = time.time() if now is None else now
@@ -166,22 +184,23 @@ class PythonLogTail(object):
         self._next_poll_at = current + self._interval
 
         try:
-            stat = os.stat(self._path)
-        except (IOError, OSError):
-            return []
-
-        identity = _file_identity(stat)
-        if self._identity is None:
-            self._identity = identity
-        elif identity != self._identity or stat.st_size < self._offset:
-            self._identity = identity
-            self._offset = 0
-            self._pending = b''
-            self._skip_until_newline = False
-
-        try:
             handle = open(self._path, 'rb')
             try:
+                stat = os.fstat(handle.fileno())
+                identity = _file_identity(stat)
+                if self._identity is None:
+                    self._identity = identity
+                elif (
+                    identity != self._identity or
+                    stat.st_size < self._offset or
+                    self._rotation_probe_changed(handle)
+                ):
+                    self._identity = identity
+                    self._offset = 0
+                    self._pending = b''
+                    self._rotation_probe = b''
+                    self._skip_until_newline = False
+
                 handle.seek(self._offset)
                 chunk = handle.read(self._read_size)
             finally:
@@ -192,6 +211,8 @@ class PythonLogTail(object):
         if not chunk:
             return []
         self._offset += len(chunk)
+        self._rotation_probe = (
+            self._rotation_probe + chunk)[-_ROTATION_PROBE_BYTES:]
         data = self._pending + chunk
         if self._skip_until_newline:
             newline = data.find(b'\n')

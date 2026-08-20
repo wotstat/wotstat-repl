@@ -10,6 +10,7 @@ import time
 sys.path.insert(0, os.path.abspath(os.path.join(
     os.path.dirname(__file__), '..', 'res', 'scripts', 'common')))
 
+import wms_agent.pythonlog as pythonlog
 from wms_agent.pythonlog import PythonLogTail
 
 
@@ -145,6 +146,31 @@ def main():
             'source': 'Render',
             'text': 'after rotation\n',
         }]
+
+        collision_path = os.path.join(work, 'collision.log')
+        collision_replacement = os.path.join(work, 'collision-replacement.log')
+        _write(collision_path, (
+            b'2026-08-20 04:34:00.000: INFO: Main: old file\n'))
+        original_file_identity = pythonlog._file_identity
+        try:
+            # Python 2.7 on Windows can expose no inode and identical ctime
+            # values for files created within the same timestamp tick.
+            pythonlog._file_identity = lambda stat: ('collision',)
+            collision_tail = PythonLogTail(collision_path, interval=0)
+            _write(collision_replacement, (
+                b'2026-08-20 04:35:00.000: INFO: Main: replacement file\n'))
+            os.remove(collision_path)
+            os.rename(collision_replacement, collision_path)
+            assert collision_tail.poll() == [{
+                'type': 'stdout',
+                'stream': 'python_log',
+                'timestamp': '2026-08-20 04:35:00.000',
+                'level': 'INFO',
+                'source': 'Main',
+                'text': 'replacement file\n',
+            }]
+        finally:
+            pythonlog._file_identity = original_file_identity
 
         print('PYTHON LOG OK -- game-start cutoff, partials, truncate, rotation')
         return 0
