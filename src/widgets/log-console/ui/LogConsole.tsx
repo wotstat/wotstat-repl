@@ -6,11 +6,11 @@ import type { LogLine } from '@/shared/api'
 import { consoleBus } from '@/entities/console'
 import {
   projectLogLines,
-  type LogDecorationSpan,
   type LogDisplayOptions,
 } from '../lib/logDocument'
 import { visibleLogLines } from '../lib/logDisplay'
 import { LOG_LANGUAGE_ID, registerLogLanguage } from '../lib/logLanguage'
+import { appendLogDocument, replaceLogDocument } from '../lib/logModel'
 import { SEVERITIES, type Severity } from '../lib/severity'
 
 const HISTORY_REPLAY_INTERVAL = 1000
@@ -61,24 +61,6 @@ async function copyText(text: string): Promise<void> {
   }
 }
 
-function toModelDecorations(
-  model: monaco.editor.ITextModel,
-  spans: readonly LogDecorationSpan[],
-  offset = 0,
-): monaco.editor.IModelDeltaDecoration[] {
-  return spans.map((span) => {
-    const start = model.getPositionAt(offset + span.start)
-    const end = model.getPositionAt(offset + span.end)
-    return {
-      range: new monaco.Range(start.lineNumber, start.column, end.lineNumber, end.column),
-      options: {
-        inlineClassName: span.className,
-        stickiness: monaco.editor.TrackedRangeStickiness.NeverGrowsWhenTypingAtEdges,
-      },
-    }
-  })
-}
-
 function isAtBottom(editor: monaco.editor.IStandaloneCodeEditor): boolean {
   return editor.getScrollTop() + editor.getLayoutInfo().height >= editor.getScrollHeight() - 2
 }
@@ -91,8 +73,7 @@ function rebuildView(view: ConsoleView, lines: readonly LogLine[]): void {
   const stick = isAtBottom(view.editor)
   const scrollTop = view.editor.getScrollTop()
   const document = projectLogLines(lines, view.display)
-  view.model.setValue(document.text)
-  view.decorations.set(toModelDecorations(view.model, document.decorations))
+  replaceLogDocument(view.model, view.decorations, document)
   view.appendedSinceReplay = 0
   if (stick) scrollToBottom(view.editor)
   else view.editor.setScrollTop(scrollTop, monaco.editor.ScrollType.Immediate)
@@ -114,15 +95,7 @@ function appendToView(view: ConsoleView, lines: readonly LogLine[]): void {
   if (!document.text) return
 
   const stick = isAtBottom(view.editor)
-  const offset = view.model.getValueLength()
-  const end = view.model.getPositionAt(offset)
-  view.model.applyEdits([
-    {
-      range: new monaco.Range(end.lineNumber, end.column, end.lineNumber, end.column),
-      text: document.text,
-    },
-  ])
-  view.decorations.append(toModelDecorations(view.model, document.decorations, offset))
+  appendLogDocument(view.model, view.decorations, document)
   if (stick) scrollToBottom(view.editor)
 }
 
