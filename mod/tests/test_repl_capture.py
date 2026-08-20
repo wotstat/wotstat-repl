@@ -14,6 +14,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(
     os.path.dirname(__file__), '..', 'res', 'scripts', 'common')))
 
 from wms_agent.loop import _Agent
+from wms_agent.pythonlog import _frame
 
 
 class _RecordingBus(object):
@@ -111,6 +112,25 @@ def main():
         agent._queue.extend(chunk_frames)
         agent._flush_output()
         assert all(frame not in agent._bus.sent for frame in chunk_frames), agent._bus.sent
+
+        # Lesta omits the source field written by WG (``Main:``). The file
+        # record still needs to retain its metadata so it can be matched to
+        # and suppressed as a mirror of the live capture.
+        lesta_live = {
+            'type': 'stdout',
+            'stream': 'stdout',
+            'level': 'INFO',
+            'timestamp': '2026-08-20 18:49:02.415',
+            'source': 'Main',
+            'text': 'Renou\n',
+        }
+        lesta_mirror = _frame(
+            b'2026-08-20 18:49:02.414: INFO: Renou')
+        agent._queue.append(lesta_live)
+        agent._flush_output()
+        agent._queue.append(lesta_mirror)
+        agent._flush_output()
+        assert lesta_mirror not in agent._bus.sent, agent._bus.sent
 
         file_only = {
             'type': 'stdout',

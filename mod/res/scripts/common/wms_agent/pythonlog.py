@@ -7,7 +7,9 @@ import time
 
 _STRUCTURED_LINE = re.compile(
     r'^(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d\.\d+):\s+'
-    r'([A-Z]+):\s+([^:\r\n]+):\s+(.*)$')
+    r'([A-Z]+):\s+(.*)$')
+_SOURCE_PAYLOAD = re.compile(r'^([^:\r\n]+):\s+(.*)$')
+_LESTA_EXECUTABLE = 'tanki.exe'
 _GAME_START_BLOCK = re.compile(
     br'(?m)^/-{8,}\\[ \t]*\r?\n'
     br'[^\r\n]*\bstarting on\s+'
@@ -29,6 +31,16 @@ def _decode(raw):
     if not isinstance(raw, bytes):
         return raw
     return raw.decode('utf-8', 'replace')
+
+
+def _has_source_field(path):
+    """Lesta omits the source column which is present in WG python.log."""
+    try:
+        names = set(name.lower() for name in os.listdir(
+            os.path.dirname(os.path.abspath(path))))
+    except (IOError, OSError):
+        return True
+    return _LESTA_EXECUTABLE not in names
 
 
 def _file_identity(stat):
@@ -75,7 +87,7 @@ def _recent_game_start(handle, size, started_at):
     return None
 
 
-def _frame(raw_line):
+def _frame(raw_line, has_source=True):
     text = _decode(raw_line.rstrip(b'\r'))
     if text.startswith(u'\ufeff'):
         text = text[1:]
@@ -86,13 +98,20 @@ def _frame(raw_line):
             'stream': 'python_log',
             'text': text + '\n',
         }
+    source = None
+    payload = match.group(3)
+    if has_source:
+        source_match = _SOURCE_PAYLOAD.match(payload)
+        if source_match is not None:
+            source = source_match.group(1)
+            payload = source_match.group(2)
     return {
         'type': 'stdout',
         'stream': 'python_log',
         'timestamp': match.group(1),
         'level': match.group(2),
-        'source': match.group(3),
-        'text': match.group(4) + '\n',
+        'source': source,
+        'text': payload + '\n',
     }
 
 
@@ -103,6 +122,7 @@ class PythonLogTail(object):
         self._path = path
         self._interval = max(0, interval)
         self._read_size = max(1, read_size)
+        self._has_source = _has_source_field(path)
         self._next_poll_at = 0
         self._identity = None
         self._offset = 0
@@ -183,4 +203,4 @@ class PythonLogTail(object):
 
         parts = data.split(b'\n')
         self._pending = parts.pop()
-        return [_frame(part) for part in parts]
+        return [_frame(part, self._has_source) for part in parts]

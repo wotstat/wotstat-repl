@@ -92,6 +92,36 @@ def main():
         assert tail.poll() == []
 
         _write(path, (
+            b'2026-08-20 04:31:11.445: INFO: source-less Lesta line\n'),
+            'ab')
+        assert tail.poll() == [{
+            'type': 'stdout',
+            'stream': 'python_log',
+            'timestamp': '2026-08-20 04:31:11.445',
+            'level': 'INFO',
+            'source': None,
+            'text': 'source-less Lesta line\n',
+        }]
+
+        lesta_dir = os.path.join(work, 'lesta')
+        os.mkdir(lesta_dir)
+        _write(os.path.join(lesta_dir, 'Tanki.exe'), b'')
+        lesta_path = os.path.join(lesta_dir, 'python.log')
+        _write(lesta_path, b'')
+        lesta_tail = PythonLogTail(lesta_path, interval=0)
+        _write(lesta_path, (
+            b'2026-08-20 04:31:12.445: INFO: '
+            b'Summary: Downloaded: 9 / 9\n'), 'ab')
+        assert lesta_tail.poll() == [{
+            'type': 'stdout',
+            'stream': 'python_log',
+            'timestamp': '2026-08-20 04:31:12.445',
+            'level': 'INFO',
+            'source': None,
+            'text': 'Summary: Downloaded: 9 / 9\n',
+        }]
+
+        _write(path, (
             b'2026-08-20 04:32:00.000: ERROR: Main: after truncate\n'))
         assert tail.poll() == [{
             'type': 'stdout',
