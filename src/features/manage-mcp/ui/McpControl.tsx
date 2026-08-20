@@ -227,7 +227,7 @@ export function McpControl() {
           id="mcp-status-popover"
           role="dialog"
           aria-label="MCP server settings"
-          className="absolute bottom-7 right-0 z-40 w-96 select-text rounded border border-edge bg-elevated p-3 text-left shadow-2xl"
+          className="absolute bottom-7 right-0 z-40 w-96 select-none rounded border border-edge bg-elevated p-3 text-left shadow-2xl"
         >
           <div className="mb-3 flex items-center justify-between">
             <span className="text-[12px] font-medium text-fg">MCP server</span>
@@ -237,14 +237,16 @@ export function McpControl() {
             </span>
           </div>
 
-          <label className="mb-3 flex items-center justify-between text-[11px] text-fg">
+          <label
+            className={`mb-3 flex items-center justify-between text-[11px] text-fg ${busy || !info ? 'cursor-default' : 'cursor-pointer'}`}
+          >
             Enabled
             <input
               type="checkbox"
               checked={info?.enabled ?? false}
               disabled={busy || !info}
               onChange={(event) => void toggle(event.target.checked)}
-              className="accent-live"
+              className="cursor-pointer accent-live disabled:cursor-default"
             />
           </label>
 
@@ -253,7 +255,7 @@ export function McpControl() {
               Local URL
             </span>
             <div className="relative">
-              <code className="block overflow-x-auto rounded bg-panel p-2 pr-9 font-mono text-[10px] text-fg">
+              <code className="block select-text overflow-x-auto rounded bg-panel p-2 pr-9 font-mono text-[10px] text-fg">
                 {info?.url ?? 'Loading…'}
               </code>
               <CopyButton
@@ -270,7 +272,7 @@ export function McpControl() {
               Network URL
             </span>
             <div className="relative">
-              <code className="block overflow-x-auto rounded bg-panel p-2 pr-9 font-mono text-[10px] text-fg">
+              <code className="block select-text overflow-x-auto rounded bg-panel p-2 pr-9 font-mono text-[10px] text-fg">
                 {info?.networkUrl ?? 'Loading…'}
               </code>
               <CopyButton
@@ -283,13 +285,13 @@ export function McpControl() {
           </div>
 
           {copyError && (
-            <span role="alert" className="mt-2 block text-[10px] text-error">
+            <span role="alert" className="mt-2 block select-text text-[10px] text-error">
               {copyError}
             </span>
           )}
 
           {shownError && (
-            <p role="alert" className="mt-2 break-words text-[10px] text-error">
+            <p role="alert" className="mt-2 select-text break-words text-[10px] text-error">
               {shownError}
             </p>
           )}
@@ -349,7 +351,7 @@ export function McpControl() {
             {cliFeedback && (
               <p
                 role={cliFeedback.ok ? 'status' : 'alert'}
-                className={`mt-2 break-words text-[10px] ${cliFeedback.ok ? 'text-ok' : 'text-error'}`}
+                className={`mt-2 select-text break-words text-[10px] ${cliFeedback.ok ? 'text-ok' : 'text-error'}`}
               >
                 {cliFeedback.text}
               </p>

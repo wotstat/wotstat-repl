@@ -64,6 +64,8 @@ With a token, the UI validates `proof = HMAC-SHA256(token,
 server id, `secure: true`, and `HMAC-SHA256(token,
 "offer|agent_id|nonce|tcp_port|server_id")`. A config-free agent sends an empty
 proof; it receives `secure: false` only when the UI allows insecure connections.
+An agent with a saved token also accepts such an insecure offer, allowing it to
+move from a previously paired desktop to an explicitly insecure listener.
 The agent connects to the source IP of the offer, not to an address supplied
 inside the payload.
 
@@ -75,8 +77,9 @@ session id. A configured agent also sends `HMAC-SHA256(token,
 `secure` flag, and `HMAC-SHA256(token,
 "welcome|protocol|agent_id|session|nonce|server_id")`. When secure mode is
 enabled, an invalid or missing proof is rejected before application frames are
-accepted. When it is disabled, anonymous connections are allowed; configured
-agents still authenticate and reject a downgrade to an anonymous session.
+accepted. When it is disabled, anonymous connections are allowed. A configured
+agent authenticates when its token matches, but accepts an explicit
+`secure: false` welcome when the token belongs to another desktop.
 
 The token authenticates peers but does not encrypt code or logs. Anonymous mode
 allows any reachable agent to use the REPL. LAN mode is for trusted networks;

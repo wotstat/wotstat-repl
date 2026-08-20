@@ -38,10 +38,11 @@ the versioned release file is intended for a game on another machine or a manual
 installation. macOS and Linux builds can connect to a remote/Proton game, but
 do not directly launch a Windows game executable.
 
-The version is part of the release download name only. Internally the desktop
-embeds `wotstat.repl.mod` and installs it as `wotstat.repl.wotmod` for World of
-Tanks or `wotstat.repl.mtmod` for Mir Tankov. These stable, unversioned names let
-a newer build replace the previous agent instead of leaving duplicate mods.
+Internally the desktop embeds the agent as `wotstat.repl.mod`, then installs it
+as `wotstat.repl_<version>.wotmod` for World of Tanks or
+`wotstat.repl_<version>.mtmod` for Mir Tankov. Before installation it removes
+older `wotstat.repl` builds from that game-version directory, so upgrading does
+not leave duplicate mods.
 
 ## Usage
 
@@ -77,16 +78,18 @@ and startup logs arrive when the UI comes online while the game is still
 running. A UI session controls only the first agent that connects; additional
 game clients keep retrying and can take over only after the active client exits.
 
-To run the game and UI on different machines, open **Agent local** in the status
+To run the game and UI on different machines, open **Agent LAN** in the status
 bar and enable **Accept LAN connections**. Keep **Secure connection** enabled
 (the default) and copy the remote game config to
 `mods\configs\wotstat-repl\agent-network.json` under the Windows game root.
-Alternatively, disable **Secure connection** and remove the config: the agent
-uses the default ports and finds the UI automatically, but any reachable agent
-can then use the REPL. The agent discovers the UI over UDP port `8767`, then
+Alternatively, disable **Secure connection**: agents may connect anonymously
+even if they still have a token saved for another desktop. Without an explicit
+host, the agent discovers the UI over UDP port `8767`, then
 opens an outgoing TCP connection to port `8766`. These are regular unprivileged
 sockets; administrator rights are not required, although the UI machine's
-firewall may ask whether to allow LAN traffic. If the network blocks broadcast,
+firewall may ask whether to allow LAN traffic. In insecure mode, any reachable
+agent can use the REPL. The popover lists every active
+IPv4 listener address, with private LAN addresses first. If the network blocks broadcast,
 an explicit UI IPv4 address is still required in the config. See
 [the agent protocol](docs/AGENT_PROTOCOL.md) for the wire-level details.
 

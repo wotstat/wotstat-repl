@@ -6,6 +6,8 @@ return desktop requests. Frames stay in memory until acknowledged, so a UI
 started late or restarted receives the retained startup log without disk IPC.
 When no config file exists, the bus uses the default ports and anonymous UDP
 discovery; a desktop with Secure connection enabled rejects that connection.
+When a desktop explicitly allows an insecure session, a configured agent may
+fall back to it even when its saved token belongs to a different desktop.
 """
 
 import collections
@@ -97,7 +99,6 @@ def _load_config(directory):
 class SocketBus(object):
     def __init__(self, config_dir, version, pid):
         self._token, self._host, self._tcp_port, self._discovery_port = _load_config(config_dir)
-        self._secure_required = self._token is not None
         self._version = version
         self._pid = pid
         self._agent_id = uuid.uuid4().hex
@@ -311,8 +312,6 @@ class SocketBus(object):
                 or frame.get('nonce') != self._hello_nonce):
             raise ValueError('invalid desktop welcome')
         secure = bool(frame.get('secure', True))
-        if self._secure_required and not secure:
-            raise ValueError('desktop attempted to downgrade secure connection')
         if secure:
             if self._token is None:
                 raise ValueError('desktop requires agent token')
@@ -374,9 +373,12 @@ class SocketBus(object):
     def _poll_discovery(self, now):
         if self._host != 'auto':
             return
+        # Keep looking while a TCP connection is still unauthenticated. A stale
+        # endpoint may accept TCP and then reject (or never answer) the hello;
+        # limiting discovery to connection-refused errors traps the agent there.
+        if not self._authenticated and now >= self._next_discovery_at:
+            self._send_discovery(now)
         if self._udp is None:
-            if self._socket is None and now >= self._next_discovery_at:
-                self._send_discovery(now)
             return
         while True:
             try:
@@ -398,8 +400,6 @@ class SocketBus(object):
                     or offer.get('nonce') != self._discovery_nonce):
                 continue
             secure = bool(offer.get('secure', True))
-            if self._secure_required and not secure:
-                continue
             if secure:
                 if self._token is None:
                     continue
@@ -409,7 +409,12 @@ class SocketBus(object):
                 ])
                 if not _constant_time_equal(expected, offer.get('proof', '')):
                     continue
-            self._discovered_endpoint = (peer[0], port)
+            endpoint = (peer[0], port)
+            endpoint_changed = endpoint != self._discovered_endpoint
+            self._discovered_endpoint = endpoint
+            if (endpoint_changed and self._socket is not None
+                    and not self._authenticated):
+                self._disconnect()
             self._next_connect_at = 0.0
             return
 

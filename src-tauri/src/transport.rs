@@ -7,7 +7,7 @@
 //! carry a session/sequence pair so reconnects can replay unacknowledged frames
 //! safely.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs::{self, OpenOptions};
 use std::io::{self, Read, Write};
 use std::net::{Ipv4Addr, Shutdown, SocketAddr, TcpListener, TcpStream, UdpSocket};
@@ -55,7 +55,7 @@ pub struct AgentNetworkConfig {
 #[serde(rename_all = "camelCase")]
 pub struct AgentConnectionInfo {
     pub local_address: String,
-    pub network_address: String,
+    pub network_addresses: Vec<String>,
     pub config_path: String,
     pub client_config: String,
 }
@@ -121,9 +121,11 @@ impl AgentConfigStore {
 
     pub fn connection_info(&self) -> Result<AgentConnectionInfo, String> {
         let config = self.load_or_create()?;
+        let local_address = format!("{}:{}", Ipv4Addr::LOCALHOST, config.tcp_port);
+        let network_addresses = network_addresses_from(&local_ipv4_addresses(), config.tcp_port);
         Ok(AgentConnectionInfo {
-            local_address: format!("{}:{}", Ipv4Addr::LOCALHOST, config.tcp_port),
-            network_address: format!("{}:{}", advertised_ipv4(), config.tcp_port),
+            local_address,
+            network_addresses,
             config_path: self.path.to_string_lossy().into_owned(),
             client_config: String::from_utf8(serialize_config(&config)?)
                 .map_err(|error| error.to_string())?,
@@ -190,6 +192,40 @@ fn advertised_ipv4() -> Ipv4Addr {
             std::net::IpAddr::V6(_) => None,
         })
         .unwrap_or(Ipv4Addr::LOCALHOST)
+}
+
+fn network_addresses_from(addresses: &[Ipv4Addr], port: u16) -> Vec<String> {
+    let mut seen = HashSet::new();
+    let mut addresses: Vec<Ipv4Addr> = addresses
+        .iter()
+        .copied()
+        .filter(|address| !address.is_loopback() && !address.is_unspecified())
+        .filter(|address| seen.insert(*address))
+        .collect();
+    addresses.sort_by_key(|address| !address.is_private());
+    addresses
+        .into_iter()
+        .map(|address| format!("{address}:{port}"))
+        .collect()
+}
+
+fn local_ipv4_addresses() -> Vec<Ipv4Addr> {
+    let mut addresses: Vec<Ipv4Addr> = if_addrs::get_if_addrs()
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|interface| interface.is_oper_up())
+        .filter_map(|interface| match interface.addr {
+            if_addrs::IfAddr::V4(address) => Some(address.ip),
+            if_addrs::IfAddr::V6(_) => None,
+        })
+        .collect();
+    if addresses
+        .iter()
+        .all(|address| address.is_loopback() || address.is_unspecified())
+    {
+        addresses.push(advertised_ipv4());
+    }
+    addresses
 }
 
 #[derive(Deserialize)]
@@ -890,6 +926,23 @@ mod tests {
     use std::sync::mpsc::RecvTimeoutError;
 
     const TOKEN: &str = "00000000-0000-4000-8000-000000000001";
+
+    #[test]
+    fn lists_all_network_addresses_with_private_lan_addresses_first() {
+        let addresses = network_addresses_from(
+            &[
+                Ipv4Addr::new(198, 18, 0, 1),
+                Ipv4Addr::new(192, 168, 0, 30),
+                Ipv4Addr::new(10, 37, 129, 2),
+            ],
+            AGENT_TCP_PORT,
+        );
+
+        assert_eq!(
+            addresses,
+            ["192.168.0.30:8766", "10.37.129.2:8766", "198.18.0.1:8766",]
+        );
+    }
 
     fn start_transport(events: Arc<Mutex<Vec<ServerEvent>>>) -> Arc<NetworkTransport> {
         start_transport_with_security(events, true)

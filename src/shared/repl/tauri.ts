@@ -17,7 +17,9 @@ export const tauriReplRuntime: ReplRuntime = {
     channel.onmessage = onEvent
     await invoke<void>('connect', { lanEnabled, secureEnabled, onEvent: channel })
     return {
-      endpoint: lanEnabled ? info.networkAddress : info.localAddress,
+      endpoint: lanEnabled
+        ? (info.networkAddresses[0] ?? info.localAddress)
+        : info.localAddress,
       waitingForAgent: true,
     }
   },

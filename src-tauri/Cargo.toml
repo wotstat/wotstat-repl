@@ -25,6 +25,7 @@ hmac = "0.12"
 sha2 = "0.10"
 hex = "0.4"
 socket2 = "0.6"
+if-addrs = "0.14.0"
 rmcp = { version = "3.1.2", default-features = false, features = ["macros", "server", "transport-streamable-http-server"] }
 axum = { version = "0.8.9", default-features = false, features = ["http1", "tokio"] }
 tokio = { version = "1.53.1", features = ["io-util", "macros", "net", "rt", "sync", "time"] }

@@ -40,7 +40,7 @@ export interface McpConnectionInfo {
 
 export interface AgentConnectionInfo {
   localAddress: string
-  networkAddress: string
+  networkAddresses: string[]
   configPath: string
   clientConfig: string
 }

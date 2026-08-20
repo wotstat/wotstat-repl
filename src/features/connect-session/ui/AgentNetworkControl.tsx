@@ -6,6 +6,7 @@ import {
 } from "@/shared/config";
 import { loadState, saveState } from "@/shared/lib";
 import { useSession } from "@/entities/session";
+import { agentLanPresentation } from "../model/agentNetworkState";
 
 export function AgentNetworkControl() {
   const root = useRef<HTMLDivElement>(null);
@@ -58,8 +59,7 @@ export function AgentNetworkControl() {
     saveState(AGENT_SECURE_STORAGE_KEY, enabled);
   };
 
-  const indicatorColor =
-    status === "connected" ? "bg-live" : lanEnabled ? "bg-warn" : "bg-faint";
+  const presentation = agentLanPresentation(lanEnabled, secureEnabled);
 
   const copyConfig = async () => {
     if (!info) return;
@@ -76,14 +76,14 @@ export function AgentNetworkControl() {
     <div ref={root} className="relative">
       <button
         type="button"
-        title={`Agent network: ${lanEnabled ? "LAN" : "localhost"}, ${secureEnabled ? "secure" : "no token required"}`}
+        title={`Agent LAN: ${lanEnabled ? (secureEnabled ? "secure" : "not secure") : "off"}`}
         aria-expanded={open}
         aria-controls="agent-network-popover"
         onClick={() => setOpen((value) => !value)}
         className="inline-flex h-5 items-center gap-1.5 rounded px-1.5 text-[11px] text-muted transition-colors hover:bg-elevated hover:text-fg"
       >
-        <span className={`size-1.5 rounded-full ${indicatorColor}`} />
-        Agent {lanEnabled ? "LAN" : "local"}
+        <span className={`size-1.5 rounded-full ${presentation.indicatorClass}`} />
+        {presentation.label}
       </button>
 
       {open && (
@@ -91,19 +91,21 @@ export function AgentNetworkControl() {
           id="agent-network-popover"
           role="dialog"
           aria-label="Agent network settings"
-          className="absolute bottom-7 right-0 z-40 w-96 select-text rounded border border-edge bg-elevated p-3 text-left shadow-2xl"
+          className="absolute bottom-7 right-0 z-40 w-96 select-none rounded border border-edge bg-elevated p-3 text-left shadow-2xl"
         >
           <div className="mb-3 text-[12px] font-medium text-fg">
             Agent network
           </div>
-          <label className="flex items-center justify-between text-[11px] text-fg">
+          <label
+            className={`flex items-center justify-between text-[11px] text-fg ${status === "disconnected" ? "cursor-pointer" : "cursor-default"}`}
+          >
             Accept LAN connections
             <input
               type="checkbox"
               checked={lanEnabled}
               disabled={status !== "disconnected"}
               onChange={(event) => toggleLan(event.target.checked)}
-              className="accent-live"
+              className="cursor-pointer accent-live disabled:cursor-default"
             />
           </label>
           <p className="mt-1 text-[10px] text-faint">
@@ -111,14 +113,16 @@ export function AgentNetworkControl() {
             applies on the next connection.
           </p>
 
-          <label className="mt-3 flex items-center justify-between text-[11px] text-fg">
+          <label
+            className={`mt-3 flex items-center justify-between text-[11px] text-fg ${status === "disconnected" ? "cursor-pointer" : "cursor-default"}`}
+          >
             Secure connection
             <input
               type="checkbox"
               checked={secureEnabled}
               disabled={status !== "disconnected"}
               onChange={(event) => toggleSecure(event.target.checked)}
-              className="accent-live"
+              className="cursor-pointer accent-live disabled:cursor-default"
             />
           </label>
           <p
@@ -129,25 +133,23 @@ export function AgentNetworkControl() {
               : "No config is required. Any reachable agent may connect and use the REPL."}
           </p>
 
-          <div className="mt-3 space-y-1">
-            <span className="text-[10px] font-medium uppercase tracking-wide text-faint">
-              Listener
-            </span>
-            <code className="block rounded bg-panel p-2 font-mono text-[10px] text-fg">
-              {info
-                ? lanEnabled
-                  ? info.networkAddress
-                  : info.localAddress
-                : "Loading…"}
-            </code>
-          </div>
+          {presentation.showListener && (
+            <div className="mt-3 space-y-1">
+              <span className="text-[10px] font-medium uppercase tracking-wide text-faint">
+                Listener
+              </span>
+              <code className="block select-text whitespace-pre rounded bg-panel p-2 font-mono text-[10px] text-fg">
+                {info ? info.networkAddresses.join("\n") : "Loading…"}
+              </code>
+            </div>
+          )}
 
           {secureEnabled && (
             <div className="mt-3 space-y-1">
               <span className="text-[10px] font-medium uppercase tracking-wide text-faint">
                 Remote game config
               </span>
-              <code className="block max-h-32 overflow-auto whitespace-pre rounded bg-panel p-2 font-mono text-[10px] text-fg">
+              <code className="block max-h-32 select-text overflow-auto whitespace-pre rounded bg-panel p-2 font-mono text-[10px] text-fg">
                 {info?.clientConfig ?? "Loading…"}
               </code>
               <button
@@ -164,13 +166,19 @@ export function AgentNetworkControl() {
           {secureEnabled && info && (
             <p className="mt-2 break-all text-[10px] text-faint">
               Place this file at{" "}
-              <code>mods/configs/wotstat-repl/agent-network.json</code> under
+              <code className="select-text">
+                mods/configs/wotstat-repl/agent-network.json
+              </code>{" "}
+              under
               the game root. Local installs write it automatically. UI copy:{" "}
-              {info.configPath}.
+              <span className="select-text">{info.configPath}</span>.
             </p>
           )}
           {error && (
-            <p role="alert" className="mt-2 text-[10px] text-error">
+            <p
+              role="alert"
+              className="mt-2 select-text text-[10px] text-error"
+            >
               {error}
             </p>
           )}
