@@ -88,7 +88,18 @@ self.MonacoEnvironment = {
 monaco.editor.defineTheme('wms-dark', {
   base: 'vs-dark',
   inherit: true,
-  rules: [],
+  rules: [
+    { token: 'log.timestamp', foreground: '6A737D' },
+    { token: 'log.category', foreground: '56C8D8' },
+    { token: 'log.info', foreground: '58A6FF', fontStyle: 'bold' },
+    { token: 'log.debug', foreground: '7D8799', fontStyle: 'bold' },
+    { token: 'log.notice', foreground: 'B392F0', fontStyle: 'bold' },
+    { token: 'log.warning', foreground: 'E3B341', fontStyle: 'bold' },
+    { token: 'log.error', foreground: 'F06D6D', fontStyle: 'bold' },
+    { token: 'log.critical', foreground: 'FF7B72', fontStyle: 'bold' },
+    { token: 'log.input', foreground: '7DD3FC', fontStyle: 'bold' },
+    { token: 'log.traceback', foreground: 'F06D6D' },
+  ],
   colors: {
     'editor.background': '#0E1116',
     'editor.foreground': '#C9D3DF',
@@ -98,6 +109,9 @@ monaco.editor.defineTheme('wms-dark', {
     'editor.lineHighlightBackground': '#151A21',
     'editorWidget.background': '#151A21',
     'editorWidget.border': '#232B36',
+    'editor.findMatchBackground': '#3FB9B066',
+    'editor.findMatchHighlightBackground': '#3FB9B033',
+    'editor.findRangeHighlightBackground': '#3FB9B01F',
   },
 })
 

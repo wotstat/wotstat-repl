@@ -55,6 +55,31 @@
     user-select: none;
   }
 
+  .monaco-editor .console-log-input {
+    color: #7dd3fc !important;
+    font-weight: 700;
+  }
+
+  .monaco-editor .console-log-result {
+    color: #56d364 !important;
+  }
+
+  .monaco-editor .console-log-system {
+    color: #8b949e !important;
+  }
+
+  .monaco-editor .console-log-warning {
+    color: #e3b341 !important;
+  }
+
+  .monaco-editor .console-log-error {
+    color: #f06d6d !important;
+  }
+
+  .monaco-editor .console-log-critical {
+    color: #ff7b72 !important;
+  }
+
   ::selection {
     background: color-mix(in oklab, var(--color-live) 30%, transparent);
   }

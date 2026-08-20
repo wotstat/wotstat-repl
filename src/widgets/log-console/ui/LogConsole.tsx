@@ -1,19 +1,21 @@
 import { useEffect, useRef, useState } from 'react'
-import { Terminal } from '@xterm/xterm'
-import { FitAddon } from '@xterm/addon-fit'
-import '@xterm/xterm/css/xterm.css'
 import { Panel, HeaderButton } from '@/shared/ui'
-import { paintLine } from '@/shared/lib'
+import { monaco } from '@/shared/lib'
+import type { LogLine } from '@/shared/api'
 import { consoleBus } from '@/entities/console'
+import { projectLogLines, type LogDecorationSpan } from '../lib/logDocument'
+import { LOG_LANGUAGE_ID, registerLogLanguage } from '../lib/logLanguage'
 import { SEVERITIES, type Severity, matchesFilter, matchesSearch } from '../lib/severity'
 
-function readBuffer(term: Terminal): string {
-  const buf = term.buffer.active
-  const out: string[] = []
-  for (let i = 0; i < buf.length; i++) {
-    out.push(buf.getLine(i)?.translateToString(true) ?? '')
-  }
-  return out.join('\n').replace(/\s+$/, '') + '\n'
+const HISTORY_REPLAY_INTERVAL = 1000
+
+interface ConsoleView {
+  editor: monaco.editor.IStandaloneCodeEditor
+  model: monaco.editor.ITextModel
+  decorations: monaco.editor.IEditorDecorationsCollection
+  hidden: ReadonlySet<Severity>
+  filter: string
+  appendedSinceReplay: number
 }
 
 async function copyText(text: string): Promise<void> {
@@ -35,6 +37,76 @@ async function copyText(text: string): Promise<void> {
   }
 }
 
+function visibleLines(
+  lines: readonly LogLine[],
+  hidden: ReadonlySet<Severity>,
+  filter: string,
+): LogLine[] {
+  return lines.filter((line) => matchesFilter(line, hidden) && matchesSearch(line, filter))
+}
+
+function toModelDecorations(
+  model: monaco.editor.ITextModel,
+  spans: readonly LogDecorationSpan[],
+  offset = 0,
+): monaco.editor.IModelDeltaDecoration[] {
+  return spans.map((span) => {
+    const start = model.getPositionAt(offset + span.start)
+    const end = model.getPositionAt(offset + span.end)
+    return {
+      range: new monaco.Range(start.lineNumber, start.column, end.lineNumber, end.column),
+      options: {
+        inlineClassName: span.className,
+        stickiness: monaco.editor.TrackedRangeStickiness.NeverGrowsWhenTypingAtEdges,
+      },
+    }
+  })
+}
+
+function isAtBottom(editor: monaco.editor.IStandaloneCodeEditor): boolean {
+  return editor.getScrollTop() + editor.getLayoutInfo().height >= editor.getScrollHeight() - 2
+}
+
+function scrollToBottom(editor: monaco.editor.IStandaloneCodeEditor): void {
+  editor.setScrollTop(editor.getScrollHeight(), monaco.editor.ScrollType.Immediate)
+}
+
+function rebuildView(view: ConsoleView, lines: readonly LogLine[]): void {
+  const stick = isAtBottom(view.editor)
+  const scrollTop = view.editor.getScrollTop()
+  const document = projectLogLines(lines)
+  view.model.setValue(document.text)
+  view.decorations.set(toModelDecorations(view.model, document.decorations))
+  view.appendedSinceReplay = 0
+  if (stick) scrollToBottom(view.editor)
+  else view.editor.setScrollTop(scrollTop, monaco.editor.ScrollType.Immediate)
+}
+
+function appendToView(view: ConsoleView, lines: readonly LogLine[]): void {
+  if (lines.length === 0) return
+
+  view.appendedSinceReplay += lines.length
+  if (view.appendedSinceReplay >= HISTORY_REPLAY_INTERVAL) {
+    rebuildView(view, visibleLines(consoleBus.history(), view.hidden, view.filter))
+    return
+  }
+
+  const document = projectLogLines(lines)
+  if (!document.text) return
+
+  const stick = isAtBottom(view.editor)
+  const offset = view.model.getValueLength()
+  const end = view.model.getPositionAt(offset)
+  view.model.applyEdits([
+    {
+      range: new monaco.Range(end.lineNumber, end.column, end.lineNumber, end.column),
+      text: document.text,
+    },
+  ])
+  view.decorations.append(toModelDecorations(view.model, document.decorations, offset))
+  if (stick) scrollToBottom(view.editor)
+}
+
 interface LogConsoleProps {
   verticalLayout: boolean
   onToggleLayout: () => void
@@ -42,28 +114,23 @@ interface LogConsoleProps {
 
 export function LogConsole({ verticalLayout, onToggleLayout }: LogConsoleProps) {
   const host = useRef<HTMLDivElement | null>(null)
-  const termRef = useRef<Terminal | null>(null)
+  const viewRef = useRef<ConsoleView | null>(null)
   const filterMenu = useRef<HTMLDetailsElement | null>(null)
 
   const [hidden, setHidden] = useState<ReadonlySet<Severity>>(new Set())
-  const [search, setSearch] = useState('')
-  const [appliedSearch, setAppliedSearch] = useState('')
+  const [filter, setFilter] = useState('')
+  const [appliedFilter, setAppliedFilter] = useState('')
   const [atBottom, setAtBottom] = useState(true)
 
-  // The xterm subscribe callback is installed once; refs keep it reading the live
-  // filter/search/scroll state without re-creating the terminal on every change.
   const hiddenRef = useRef(hidden)
-  const searchRef = useRef(appliedSearch)
-  const atBottomRef = useRef(atBottom)
+  const filterRef = useRef(appliedFilter)
   hiddenRef.current = hidden
-  searchRef.current = appliedSearch
-  atBottomRef.current = atBottom
+  filterRef.current = appliedFilter
 
-  // Debounce the search box so each keystroke doesn't replay the whole scrollback.
   useEffect(() => {
-    const t = setTimeout(() => setAppliedSearch(search), 150)
-    return () => clearTimeout(t)
-  }, [search])
+    const timer = setTimeout(() => setAppliedFilter(filter), 150)
+    return () => clearTimeout(timer)
+  }, [filter])
 
   useEffect(() => {
     const closeFilterMenu = (event: PointerEvent) => {
@@ -77,81 +144,87 @@ export function LogConsole({ verticalLayout, onToggleLayout }: LogConsoleProps) 
     const node = host.current
     if (!node) return
 
-    const term = new Terminal({
+    registerLogLanguage(monaco)
+    const editor = monaco.editor.create(node, {
+      value: '',
+      language: LOG_LANGUAGE_ID,
+      theme: 'wms-dark',
+      readOnly: true,
+      domReadOnly: true,
+      automaticLayout: true,
+      minimap: { enabled: false },
+      lineNumbers: 'off',
+      lineDecorationsWidth: 0,
+      glyphMargin: false,
+      folding: false,
+      overviewRulerLanes: 0,
+      hideCursorInOverviewRuler: true,
       fontFamily: 'JetBrains Mono, ui-monospace, monospace',
       fontSize: 13,
-      convertEol: false,
-      cursorBlink: false,
-      scrollback: 20000,
-      theme: { background: '#0E1116', foreground: '#C9D3DF', cursor: '#0E1116' },
+      wordWrap: 'on',
+      wrappingIndent: 'none',
+      scrollBeyondLastLine: false,
+      renderLineHighlight: 'none',
+      renderWhitespace: 'none',
+      stickyScroll: { enabled: false },
+      padding: { top: 4, bottom: 4 },
     })
-    termRef.current = term
-    const fit = new FitAddon()
-    term.loadAddon(fit)
-    term.open(node)
-    const doFit = () => {
-      try {
-        fit.fit()
-      } catch {
-        // container not laid out yet; the observer will retry
-      }
-    }
-    requestAnimationFrame(doFit)
-
-    const observer = new ResizeObserver(doFit)
-    observer.observe(node)
-
-    const isAtBottom = () => {
-      const buf = term.buffer.active
-      return buf.viewportY >= buf.baseY
+    const model = editor.getModel()
+    if (!model) {
+      editor.dispose()
+      return
     }
 
-    const unsubScroll = term.onScroll(() => setAtBottom(isAtBottom()))
+    const view: ConsoleView = {
+      editor,
+      model,
+      decorations: editor.createDecorationsCollection(),
+      hidden: hiddenRef.current,
+      filter: filterRef.current,
+      appendedSinceReplay: 0,
+    }
+    viewRef.current = view
+    rebuildView(view, visibleLines(consoleBus.history(), view.hidden, view.filter))
 
-    const unsub = consoleBus.subscribe((lines) => {
-      const stick = isAtBottom()
-      let wrote = false
-      for (const line of lines) {
-        if (!matchesFilter(line, hiddenRef.current) || !matchesSearch(line, searchRef.current)) continue
-        term.write(paintLine(line))
-        wrote = true
-      }
-      if (wrote && stick) term.scrollToBottom()
+    const scrollSubscription = editor.onDidScrollChange(() => setAtBottom(isAtBottom(editor)))
+    const unsubscribe = consoleBus.subscribe((lines) => {
+      appendToView(view, visibleLines(lines, hiddenRef.current, filterRef.current))
     })
-    const unsubClear = consoleBus.subscribeClear(() => term.reset())
+    const unsubscribeClear = consoleBus.subscribeClear(() => {
+      model.setValue('')
+      view.decorations.clear()
+      view.appendedSinceReplay = 0
+      setAtBottom(true)
+    })
 
     return () => {
-      unsubScroll.dispose()
-      unsub()
-      unsubClear()
-      observer.disconnect()
-      term.dispose()
-      termRef.current = null
+      scrollSubscription.dispose()
+      unsubscribe()
+      unsubscribeClear()
+      editor.dispose()
+      model.dispose()
+      viewRef.current = null
     }
   }, [])
 
-  // Re-render retained scrollback whenever the filter or search changes.
   useEffect(() => {
-    const term = termRef.current
-    if (!term) return
-    term.clear()
-    for (const line of consoleBus.history()) {
-      if (!matchesFilter(line, hidden) || !matchesSearch(line, appliedSearch)) continue
-      term.write(paintLine(line))
-    }
-    if (atBottomRef.current) term.scrollToBottom()
-  }, [hidden, appliedSearch])
+    const view = viewRef.current
+    if (!view || (view.hidden === hidden && view.filter === appliedFilter)) return
+    view.hidden = hidden
+    view.filter = appliedFilter
+    rebuildView(view, visibleLines(consoleBus.history(), hidden, appliedFilter))
+  }, [hidden, appliedFilter])
 
   const onCopy = () => {
-    const term = termRef.current
-    if (term) void copyText(readBuffer(term))
+    const text = viewRef.current?.model.getValue()
+    if (text !== undefined) void copyText(text)
   }
 
-  const toggle = (sev: Severity) => {
-    setHidden((prev) => {
-      const next = new Set(prev)
-      if (next.has(sev)) next.delete(sev)
-      else next.add(sev)
+  const toggle = (severity: Severity) => {
+    setHidden((previous) => {
+      const next = new Set(previous)
+      if (next.has(severity)) next.delete(severity)
+      else next.add(severity)
       return next
     })
   }
@@ -189,29 +262,31 @@ export function LogConsole({ verticalLayout, onToggleLayout }: LogConsoleProps) 
               </svg>
             </summary>
             <div className="absolute top-7 left-0 w-36 rounded border border-edge bg-elevated p-1 shadow-lg">
-              {SEVERITIES.map((sev) => (
+              {SEVERITIES.map((severity) => (
                 <label
-                  key={sev}
+                  key={severity}
                   className="flex cursor-pointer select-none items-center gap-2 rounded px-2 py-1.5 text-[11px] text-fg hover:bg-panel"
                 >
                   <input
                     type="checkbox"
-                    checked={!hidden.has(sev)}
-                    onChange={() => toggle(sev)}
+                    checked={!hidden.has(severity)}
+                    onChange={() => toggle(severity)}
                     className="accent-live"
                   />
-                  {sev}
+                  {severity}
                 </label>
               ))}
             </div>
           </details>
           <input
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            placeholder="search"
+            value={filter}
+            onChange={(event) => setFilter(event.target.value)}
+            placeholder="filter"
+            title="Filter console output"
+            aria-label="Filter console output"
             className="h-6 w-28 rounded border border-edge bg-transparent px-2 text-[11px] text-fg placeholder:text-muted focus:border-live focus:outline-none"
           />
-          <HeaderButton onClick={onCopy} title="Copy console to clipboard">
+          <HeaderButton onClick={onCopy} title="Copy filtered console to clipboard">
             Copy
           </HeaderButton>
           <HeaderButton onClick={() => consoleBus.clear()} title="Clear console">
@@ -221,13 +296,16 @@ export function LogConsole({ verticalLayout, onToggleLayout }: LogConsoleProps) 
       }
     >
       <div className="relative h-full w-full">
-        <div ref={host} className="h-full w-full px-2 py-1" />
+        <div ref={host} className="h-full w-full" />
         {!atBottom && (
           <button
             type="button"
-            onClick={() => termRef.current?.scrollToBottom()}
+            onClick={() => {
+              const editor = viewRef.current?.editor
+              if (editor) scrollToBottom(editor)
+            }}
             title="Jump to bottom"
-            className="absolute bottom-3 right-3 h-7 rounded border border-edge bg-[#0E1116] px-2 text-[11px] text-muted transition-colors hover:border-live hover:text-fg"
+            className="absolute bottom-3 right-3 z-10 h-7 rounded border border-edge bg-[#0E1116] px-2 text-[11px] text-muted transition-colors hover:border-live hover:text-fg"
           >
             Jump to bottom
           </button>
