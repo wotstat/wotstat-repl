@@ -20,6 +20,10 @@ _LIVE_MIRROR_STREAMS = frozenset(('stdout', 'stderr', 'log'))
 _LIVE_MIRROR_CACHE = 4096
 _MIRROR_TIME_WINDOW_MS = 250
 _MIRROR_PREFIX_MIN = 64
+_DAYS_BEFORE_MONTH = (
+    0, 31, 59, 90, 120, 151,
+    181, 212, 243, 273, 304, 334,
+)
 
 
 def _normalized_level(value):
@@ -30,14 +34,44 @@ def _normalized_level(value):
 
 
 def _timestamp_millis(value):
-    if not value or len(value) < 19:
-        return None
     try:
-        seconds = int(time.mktime(time.strptime(
-            value[:19], '%Y-%m-%d %H:%M:%S'))) * 1000
+        if not value or len(value) < 19:
+            return None
+        if (value[4] != '-' or value[7] != '-' or value[10] != ' ' or
+                value[13] != ':' or value[16] != ':'):
+            return None
+        year = int(value[0:4])
+        month = int(value[5:7])
+        day = int(value[8:10])
+        hour = int(value[11:13])
+        minute = int(value[14:16])
+        second = int(value[17:19])
+        if year < 1 or year > 9999 or month < 1 or month > 12:
+            return None
+        leap_year = year % 4 == 0 and (year % 100 != 0 or year % 400 == 0)
+        month_days = (
+            31, 29 if leap_year else 28, 31, 30, 31, 30,
+            31, 31, 30, 31, 30, 31,
+        )
+        if (day < 1 or day > month_days[month - 1] or
+                hour < 0 or hour > 23 or minute < 0 or minute > 59 or
+                second < 0 or second > 59):
+            return None
+        previous_year = year - 1
+        ordinal = (
+            365 * previous_year
+            + previous_year // 4
+            - previous_year // 100
+            + previous_year // 400
+            + _DAYS_BEFORE_MONTH[month - 1]
+            + day
+        )
+        if month > 2 and leap_year:
+            ordinal += 1
+        seconds = (((ordinal * 24 + hour) * 60 + minute) * 60 + second)
         fraction = value[20:] if len(value) > 19 and value[19] == '.' else ''
-        return seconds + int((fraction + '000')[:3])
-    except (TypeError, ValueError, OverflowError):
+        return seconds * 1000 + int((fraction + '000')[:3])
+    except (IndexError, TypeError, ValueError, OverflowError):
         return None
 
 

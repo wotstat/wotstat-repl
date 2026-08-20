@@ -13,7 +13,8 @@ except ImportError:
 sys.path.insert(0, os.path.abspath(os.path.join(
     os.path.dirname(__file__), '..', 'res', 'scripts', 'common')))
 
-from wms_agent.loop import _Agent
+import wms_agent.loop as agent_loop
+from wms_agent.loop import _Agent, _timestamp_millis
 from wms_agent.pythonlog import _frame
 
 
@@ -32,6 +33,45 @@ def main():
         agent = _Agent(work, 0.01, False, None, None, python_log_path=None)
         agent._bus.close()
         agent._bus = _RecordingBus()
+
+        # Timestamp parsing runs on the REPL worker while the game is still
+        # loading mods.  time.strptime() performs unsafe one-time locale/cache
+        # initialization there, which deadlocks the Lesta client.
+        original_strptime = agent_loop.time.strptime
+
+        def forbidden_strptime(*args, **kwargs):
+            raise RuntimeError('time.strptime must not run on the REPL worker')
+
+        agent_loop.time.strptime = forbidden_strptime
+        startup_frame = {
+            'type': 'stdout',
+            'stream': 'log',
+            'level': 'logInfo',
+            'timestamp': '2026-08-20 19:18:57.714',
+            'source': 'Main',
+            'text': '[startup] REPL ready\n',
+        }
+        try:
+            agent._queue.append(startup_frame)
+            agent._flush_output()
+        finally:
+            agent_loop.time.strptime = original_strptime
+        assert startup_frame in agent._bus.sent, agent._bus.sent
+
+        rollover = (
+            _timestamp_millis('2026-08-20 19:59:59.900'),
+            _timestamp_millis('2026-08-20 20:00:00.100'),
+        )
+        leap_day = (
+            _timestamp_millis('2024-02-28 23:59:59.900'),
+            _timestamp_millis('2024-02-29 00:00:00.100'),
+        )
+        assert rollover[1] - rollover[0] == 200, rollover
+        assert leap_day[1] - leap_day[0] == 200, leap_day
+        for invalid_timestamp in (
+                None, '', '2026-13-20 19:18:57.714',
+                '2026-02-29 19:18:57.714', '2026-08-20 24:18:57.714'):
+            assert _timestamp_millis(invalid_timestamp) is None, invalid_timestamp
 
         process_out = sys.stdout
         sys.stdout = StringIO()
