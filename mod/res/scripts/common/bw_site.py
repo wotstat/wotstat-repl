@@ -14,7 +14,8 @@ try:
     _app_config = os.path.join(_base, 'WotStatWoTREPL')
     _config = (_local_config if os.path.isfile(
         os.path.join(_local_config, 'agent-network.json')) else _app_config)
-    _web_url = wms_agent.start(_config)
+    _web_url = wms_agent.start(
+        _config, python_log_path=os.path.join(os.getcwd(), 'python.log'))
     if _web_url:
         print 'WotStat REPL: web UI available at %s' % _web_url
     else:

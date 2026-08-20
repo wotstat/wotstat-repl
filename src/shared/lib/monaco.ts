@@ -90,6 +90,7 @@ monaco.editor.defineTheme('wms-dark', {
   inherit: true,
   rules: [
     { token: 'log.timestamp', foreground: '6A737D' },
+    { token: 'log.source', foreground: '8B949E' },
     { token: 'log.category', foreground: '56C8D8' },
     { token: 'log.info', foreground: '58A6FF', fontStyle: 'bold' },
     { token: 'log.debug', foreground: '7D8799', fontStyle: 'bold' },

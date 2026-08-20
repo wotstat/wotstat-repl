@@ -46,6 +46,10 @@ pub enum OutFrame {
         stream: String,
         #[serde(default)]
         level: Option<String>,
+        #[serde(default)]
+        timestamp: Option<String>,
+        #[serde(default)]
+        source: Option<String>,
         text: String,
     },
     Result {
@@ -114,6 +118,8 @@ pub struct Diagnostic {
 pub struct LogLine {
     pub stream: String,
     pub level: Option<String>,
+    pub timestamp: Option<String>,
+    pub source: Option<String>,
     pub text: String,
 }
 
@@ -154,6 +160,29 @@ mod tests {
         assert!(matches!(
             new,
             OutFrame::Result { stdout, stderr, .. } if stdout == "out" && stderr == "err"
+        ));
+    }
+
+    #[test]
+    fn stdout_accepts_optional_timestamp_metadata() {
+        let frame: OutFrame = serde_json::from_str(
+            r#"{"type":"stdout","stream":"python_log","level":"INFO","timestamp":"2026-08-20 04:31:08.295","source":"Main","text":"ready\n"}"#,
+        )
+        .unwrap();
+
+        assert!(matches!(
+            frame,
+            OutFrame::Stdout {
+                stream,
+                level: Some(level),
+                timestamp: Some(timestamp),
+                source: Some(source),
+                text,
+            } if stream == "python_log"
+                && level == "INFO"
+                && timestamp == "2026-08-20 04:31:08.295"
+                && source == "Main"
+                && text == "ready\n"
         ));
     }
 }

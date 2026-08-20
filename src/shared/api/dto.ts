@@ -17,6 +17,8 @@ export interface Diagnostic {
 export interface LogLine {
   stream: string
   level?: string | null
+  timestamp?: string | null
+  source?: string | null
   text: string
 }
 
@@ -61,7 +63,14 @@ export type ServerEvent =
   | { kind: 'disconnected' }
 
 export type OutFrame =
-  | { type: 'stdout'; stream: string; level?: string | null; text: string }
+  | {
+      type: 'stdout'
+      stream: string
+      level?: string | null
+      timestamp?: string | null
+      source?: string | null
+      text: string
+    }
   | {
       type: 'result'
       id: string

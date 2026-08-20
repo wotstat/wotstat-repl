@@ -5,10 +5,30 @@ export const LOG_LANGUAGE_ID = 'wms-log'
 let registered = false
 
 const TIMESTAMP = String.raw`\d{4}-\d\d-\d\d \d\d:\d\d:\d\d\.\d+:?\s+`
+const SOURCE = String.raw`[^\s:\[][^:\n]*:\s+`
 const CATEGORY = String.raw`(?:\[[^\]\n,]*\])+\s*`
 
-function levelLine(levels: string): RegExp {
-  return new RegExp(`^(${TIMESTAMP})?((?:${levels}):?\\s+)(${CATEGORY})?(.*)$`)
+type LogRule = [RegExp, string[]]
+
+function levelLines(levels: string, levelToken: string, messageToken = ''): LogRule[] {
+  const level = String.raw`(?:${levels}):?\s+`
+  return [
+    [new RegExp(`^(${TIMESTAMP})(${level})(${SOURCE})(${CATEGORY})(.*)$`),
+      ['log.timestamp', levelToken, 'log.source', 'log.category', messageToken]],
+    [new RegExp(`^(${TIMESTAMP})(${level})(${SOURCE})(.*)$`),
+      ['log.timestamp', levelToken, 'log.source', messageToken]],
+    [new RegExp(`^(${TIMESTAMP})(${level})(${CATEGORY})(.*)$`),
+      ['log.timestamp', levelToken, 'log.category', messageToken]],
+    [new RegExp(`^(${TIMESTAMP})(${level})(.*)$`),
+      ['log.timestamp', levelToken, messageToken]],
+    [new RegExp(`^(${level})(${SOURCE})(${CATEGORY})(.*)$`),
+      [levelToken, 'log.source', 'log.category', messageToken]],
+    [new RegExp(`^(${level})(${SOURCE})(.*)$`),
+      [levelToken, 'log.source', messageToken]],
+    [new RegExp(`^(${level})(${CATEGORY})(.*)$`),
+      [levelToken, 'log.category', messageToken]],
+    [new RegExp(`^(${level})(.*)$`), [levelToken, messageToken]],
+  ]
 }
 
 export function registerLogLanguage(m: Pick<typeof monaco, 'languages'>): void {
@@ -20,15 +40,16 @@ export function registerLogLanguage(m: Pick<typeof monaco, 'languages'>): void {
     tokenizer: {
       root: [
         [/^((?:>>>|\.\.\.))(\s?)/, ['log.input', '']],
-        [levelLine('CRITICAL|HACK'), ['log.timestamp', 'log.critical', 'log.category', 'log.critical']],
-        [levelLine('ERROR'), ['log.timestamp', 'log.error', 'log.category', 'log.error']],
-        [levelLine('WARNING'), ['log.timestamp', 'log.warning', 'log.category', 'log.warning']],
-        [levelLine('NOTICE|HOOK'), ['log.timestamp', 'log.notice', 'log.category', '']],
-        [levelLine('DEBUG|TRACE'), ['log.timestamp', 'log.debug', 'log.category', '']],
-        [levelLine('INFO'), ['log.timestamp', 'log.info', 'log.category', '']],
+        ...levelLines('CRITICAL|HACK', 'log.critical', 'log.critical'),
+        ...levelLines('ERROR', 'log.error', 'log.error'),
+        ...levelLines('WARNING', 'log.warning', 'log.warning'),
+        ...levelLines('NOTICE|HOOK', 'log.notice'),
+        ...levelLines('DEBUG|TRACE', 'log.debug'),
+        ...levelLines('INFO', 'log.info'),
         [/^Traceback \(most recent call last\):.*$/, 'log.error'],
         [/^\s*File\s+"[^"]+",\s+line\s+\d+.*$/, 'log.traceback'],
         [/^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d\.\d+:?\s+/, 'log.timestamp'],
+        [/^[^\s:\[][^:\n]*:\s+/, 'log.source'],
         [/(?:\[[^\]\n,]*\])+/, 'log.category'],
         [/\b(?:CRITICAL|HACK)\b/, 'log.critical'],
         [/\bERROR\b/, 'log.error'],

@@ -44,11 +44,16 @@ def post_json(url, origin, value):
 def main():
     work = tempfile.mkdtemp(prefix='wms_web_itest_')
     web_root = os.path.join(work, 'web')
+    python_log = os.path.join(work, 'python.log')
     os.makedirs(os.path.join(web_root, 'assets'))
     with open(os.path.join(web_root, 'index.html'), 'wb') as handle:
         handle.write(b'<!doctype html><script src="/assets/app.js"></script>')
     with open(os.path.join(web_root, 'assets', 'app.js'), 'wb') as handle:
         handle.write(b'document.body.dataset.ready = "yes";')
+    with open(python_log, 'wb') as handle:
+        handle.write(
+            b'2026-08-19 04:31:08.295: INFO: Main: '
+            b'[web.cache.web_cache] from old native game log\n')
 
     endpoint = None
     try:
@@ -58,9 +63,15 @@ def main():
             web_enabled=True,
             web_root=web_root,
             web_port=0,
+            python_log_path=python_log,
         )
         assert endpoint and endpoint.startswith('http://127.0.0.1:'), endpoint
         origin = endpoint.rstrip('/')
+
+        with open(python_log, 'ab') as handle:
+            handle.write(
+                b'2026-08-20 04:31:08.295: INFO: Main: '
+                b'[web.cache.web_cache] from current native game log\n')
 
         page = urlopen(endpoint, timeout=4.0)
         try:
@@ -71,6 +82,7 @@ def main():
 
         session = read_json(endpoint + 'api/session')
         assert session.get('pid') == os.getpid(), session
+        assert session.get('session'), session
 
         evaluated = post_json(endpoint + 'api/repl', origin, {
             'type': 'exec', 'code': '40 + 2',
@@ -81,12 +93,34 @@ def main():
             'type': 'exec', 'code': "print('web-line')",
         })
         assert printed.get('ok'), printed
-        events = read_json(endpoint + 'api/events?cursor=0&limit=500&wait_ms=1000')
+        cursor = 0
+        collected = []
+        events = None
+        for _attempt in range(5):
+            events = read_json(
+                endpoint + 'api/events?cursor=%d&limit=500&wait_ms=1000' % cursor)
+            collected.extend(events.get('events', []))
+            cursor = events.get('nextCursor', cursor)
+            if any(event.get('stream') == 'python_log' for event in collected):
+                break
         output = ''.join(
-            event.get('text', '') for event in events.get('events', [])
+            event.get('text', '') for event in collected
             if event.get('type') == 'stdout')
         assert 'web-line' in output, repr(output)
-        assert events.get('nextCursor', 0) > 0, events
+        assert 'old native game log' not in output, repr(output)
+        file_events = [
+            event for event in collected
+            if event.get('stream') == 'python_log'
+        ]
+        assert file_events == [{
+            'type': 'stdout',
+            'stream': 'python_log',
+            'timestamp': '2026-08-20 04:31:08.295',
+            'level': 'INFO',
+            'source': 'Main',
+            'text': '[web.cache.web_cache] from current native game log\n',
+        }], file_events
+        assert cursor > 0, events
 
         try:
             post_json(endpoint + 'api/repl', 'http://example.invalid', {
@@ -96,7 +130,7 @@ def main():
         except HTTPError as error:
             assert error.code == 403, error.code
 
-        print('WEB OK -- static/session/exec/events/origin guard')
+        print('WEB OK -- static/session/exec/python.log events/origin guard')
         return 0
     finally:
         try:

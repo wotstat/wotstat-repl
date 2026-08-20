@@ -3,7 +3,7 @@ import {
   DEFAULT_COMPLETION_BUDGET,
   MAX_COMPLETION_BUDGET,
 } from '@/shared/config'
-import { loadState } from '@/shared/lib'
+import { loadState } from '@/shared/lib/storage'
 
 export function completionBudget(): number {
   const value = loadState<unknown>(

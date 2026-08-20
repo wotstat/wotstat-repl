@@ -47,4 +47,35 @@ describe('projectLogLines', () => {
       { start: 0, end: 8, className: 'console-log-error' },
     ])
   })
+
+  test('projects optional timestamp and level metadata without changing payload text', () => {
+    const document = projectLogLines(
+      [{
+        stream: 'log',
+        level: 'logInfo',
+        timestamp: '2026-08-19 21:48:32.033',
+        text: '[web.cache.web_cache] WebDownloader destroyed\n',
+      }],
+      { showTimestamp: true, showLevel: true, showSource: false },
+    )
+
+    expect(document.text).toBe(
+      '2026-08-19 21:48:32.033: INFO: [web.cache.web_cache] WebDownloader destroyed\n',
+    )
+  })
+
+  test('renders print output with the same metadata shape as python.log', () => {
+    const document = projectLogLines(
+      [{
+        stream: 'stdout',
+        level: 'INFO',
+        timestamp: '2026-08-20 05:17:07.011',
+        source: 'Main',
+        text: 'Renou_EU\n',
+      }],
+      { showTimestamp: true, showLevel: true, showSource: true },
+    )
+
+    expect(document.text).toBe('2026-08-20 05:17:07.011: INFO: Main: Renou_EU\n')
+  })
 })

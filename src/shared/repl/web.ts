@@ -5,6 +5,7 @@ import type { ReplRuntime } from './runtime'
 interface WebSession {
   version?: string | null
   pid?: number | null
+  session: string
 }
 
 type WebEventFrame =
@@ -19,6 +20,8 @@ interface WebEventRead {
 
 let generation = 0
 let activePoll: AbortController | null = null
+let eventSession: string | null = null
+let eventCursor = 0
 
 async function readJson<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(path, {
@@ -40,20 +43,25 @@ function postFrame(frame: Record<string, unknown>): Promise<OutFrame> {
   })
 }
 
-function emitSession(onEvent: (event: ServerEvent) => void, session: WebSession): void {
+function emitSession(onEvent: (event: ServerEvent) => void, session: WebSession): boolean {
+  const changed = eventSession !== session.session
+  if (changed) {
+    eventSession = session.session
+    eventCursor = 0
+  }
   onEvent({
     kind: 'hello',
     version: session.version,
     pid: session.pid,
     remote: false,
   })
+  return changed
 }
 
 async function pollEvents(
   currentGeneration: number,
   onEvent: (event: ServerEvent) => void,
 ): Promise<void> {
-  let cursor = 0
   let online = true
 
   while (currentGeneration === generation) {
@@ -61,17 +69,16 @@ async function pollEvents(
     activePoll = controller
     try {
       const read = await readJson<WebEventRead>(
-        `/api/events?cursor=${cursor}&limit=500&wait_ms=20000`,
+        `/api/events?cursor=${eventCursor}&limit=500&wait_ms=20000`,
         { signal: controller.signal },
       )
       if (currentGeneration !== generation) return
       if (!online) {
-        emitSession(onEvent, await readJson<WebSession>('/api/session'))
+        const changed = emitSession(onEvent, await readJson<WebSession>('/api/session'))
         online = true
-        cursor = 0
-        continue
+        if (changed) continue
       }
-      cursor = read.nextCursor
+      eventCursor = read.nextCursor
       if (read.truncated) {
         onEvent({
           kind: 'log',
@@ -80,7 +87,13 @@ async function pollEvents(
       }
       const lines = read.events
         .filter((event): event is Extract<WebEventFrame, { type: 'stdout' }> => event.type === 'stdout')
-        .map(({ stream, level, text }) => ({ stream, level, text }))
+        .map(({ stream, level, timestamp, source, text }) => ({
+          stream,
+          level,
+          timestamp,
+          source,
+          text,
+        }))
       if (lines.length > 0) onEvent({ kind: 'log', lines })
       if (read.events.some((event) => event.type === 'disconnected')) {
         onEvent({ kind: 'disconnected' })

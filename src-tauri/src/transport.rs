@@ -700,6 +700,8 @@ impl NetworkTransport {
                     lines: vec![LogLine {
                         stream: "system".to_string(),
                         level: Some("WARN".to_string()),
+                        timestamp: None,
+                        source: None,
                         text: format!("agent dropped buffered frames {from}..{to}\n"),
                     }],
                 });
@@ -709,11 +711,15 @@ impl NetworkTransport {
                 OutFrame::Stdout {
                     stream,
                     level,
+                    timestamp,
+                    source,
                     text,
                 } => (self.sink)(ServerEvent::Log {
                     lines: vec![LogLine {
                         stream,
                         level,
+                        timestamp,
+                        source,
                         text,
                     }],
                 }),

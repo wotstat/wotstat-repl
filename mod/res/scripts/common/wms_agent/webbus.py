@@ -259,6 +259,7 @@ class WebBus(object):
     def __init__(self, _config_dir, version, pid, web_root=None, port=None):
         self._version = version
         self._pid = pid
+        self._session = uuid.uuid4().hex
         self.assets = _AssetStore(web_root)
         self._running = True
         self._requests = collections.deque()
@@ -291,7 +292,11 @@ class WebBus(object):
         self._server_thread.start()
 
     def session_info(self):
-        return {'version': self._version, 'pid': self._pid}
+        return {
+            'version': self._version,
+            'pid': self._pid,
+            'session': self._session,
+        }
 
     def poll(self):
         requests = []

@@ -874,6 +874,8 @@ mod tests {
         LogLine {
             stream: "stdout".into(),
             level: None,
+            timestamp: None,
+            source: None,
             text: text.into(),
         }
     }

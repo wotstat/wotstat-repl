@@ -44,5 +44,7 @@ export function matchesFilter(line: LogLine, hidden: ReadonlySet<Severity>): boo
 
 export function matchesSearch(line: LogLine, needle: string): boolean {
   if (!needle) return true
-  return line.text.toLowerCase().includes(needle.toLowerCase())
+  const normalizedNeedle = needle.toLowerCase()
+  return [line.timestamp, line.level, line.source, line.text]
+    .some((value) => value?.toLowerCase().includes(normalizedNeedle))
 }
