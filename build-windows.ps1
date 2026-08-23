@@ -3,6 +3,7 @@ param([string]$Version)
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path
 $tauriConfig = Join-Path ([IO.Path]::GetTempPath()) "wotstat-repl-$PID.json"
+$previousBuildVersion = $env:WOTSTAT_VERSION
 
 Push-Location $root
 try {
@@ -15,6 +16,7 @@ try {
     if ($Version -notmatch '^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$') {
         throw "Invalid version: $Version"
     }
+    $env:WOTSTAT_VERSION = $Version
 
     $python = 'C:\Python27\python.exe'
     if (-not (Test-Path $python)) {
@@ -49,6 +51,11 @@ try {
     bun run tauri build --config $tauriConfig
     if ($LASTEXITCODE -ne 0) { throw 'Tauri build failed' }
 } finally {
+    if ($null -eq $previousBuildVersion) {
+        Remove-Item Env:WOTSTAT_VERSION -ErrorAction SilentlyContinue
+    } else {
+        $env:WOTSTAT_VERSION = $previousBuildVersion
+    }
     Remove-Item $tauriConfig -Force -ErrorAction SilentlyContinue
     Pop-Location
 }

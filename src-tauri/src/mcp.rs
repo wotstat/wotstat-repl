@@ -742,7 +742,7 @@ fn tool_error(error: impl Into<String>) -> CallToolResult {
 impl ServerHandler for WotMcpServer {
     fn get_info(&self) -> ServerInfo {
         ServerInfo::new(ServerCapabilities::builder().enable_tools().build()).with_server_info(
-            Implementation::new("wotstat-repl", env!("CARGO_PKG_VERSION"))
+            Implementation::new("wotstat-repl", crate::APP_VERSION)
                 .with_title("WotStat World of Tanks REPL")
                 .with_description(
                     "A development MCP server for controlling local World of Tanks clients and executing Python 2.7 code in a connected local or remote game.",

@@ -141,6 +141,12 @@ struct RemoteClient {
     agent_status: AgentStatus,
 }
 
+#[derive(Clone)]
+struct AttachedLocalProcess {
+    game: GameInfo,
+    executable: PathBuf,
+}
+
 #[derive(Debug)]
 enum StartDecision {
     Reserved,
@@ -637,7 +643,7 @@ impl ClientState {
         reported_pid: Option<i64>,
         agent_version: Option<String>,
         remote_connection: bool,
-        attached_game: Option<GameInfo>,
+        attached_process: Option<AttachedLocalProcess>,
     ) -> bool {
         if remote_connection {
             let cleared = self.logs.clear();
@@ -649,6 +655,33 @@ impl ClientState {
             return cleared;
         }
         let local_pid = reported_pid.and_then(|pid| u32::try_from(pid).ok());
+        if let (Some(pid), Some(attached)) = (local_pid, attached_process) {
+            let can_bind = self
+                .active
+                .as_ref()
+                .map(|active| {
+                    active.process_status == ProcessStatus::Stopped
+                        || same_game(&active.game, &attached.game)
+                })
+                .unwrap_or(true);
+            if can_bind {
+                let cleared = self
+                    .active
+                    .as_ref()
+                    .is_none_or(|active| active.process_status == ProcessStatus::Stopped)
+                    && self.logs.clear();
+                self.active = Some(ActiveClient {
+                    game: attached.game,
+                    expected_exe: attached.executable,
+                    pid: Some(pid),
+                    process_status: ProcessStatus::Running,
+                    agent_status: AgentStatus::Ready,
+                    agent_version,
+                });
+                self.remote = None;
+                return cleared;
+            }
+        }
         let can_attach = self
             .active
             .as_ref()
@@ -656,24 +689,11 @@ impl ClientState {
             .unwrap_or(true);
         if can_attach {
             let cleared = self.logs.clear();
-            if let (Some(pid), Some(game)) = (local_pid, attached_game) {
-                let expected_exe = PathBuf::from(&game.path).join(&game.exe);
-                self.active = Some(ActiveClient {
-                    game,
-                    expected_exe,
-                    pid: Some(pid),
-                    process_status: ProcessStatus::Running,
-                    agent_status: AgentStatus::Ready,
-                    agent_version,
-                });
-                self.remote = None;
-            } else {
-                self.remote = Some(RemoteClient {
-                    agent_version,
-                    agent_pid: reported_pid,
-                    agent_status: AgentStatus::Ready,
-                });
-            }
+            self.remote = Some(RemoteClient {
+                agent_version,
+                agent_pid: reported_pid,
+                agent_status: AgentStatus::Ready,
+            });
             return cleared;
         }
         let active = self.active.as_mut().unwrap();
@@ -849,11 +869,10 @@ fn same_game(left: &GameInfo, right: &GameInfo) -> bool {
     left.path.eq_ignore_ascii_case(&right.path) && left.exe.eq_ignore_ascii_case(&right.exe)
 }
 
-fn game_for_process(pid: u32) -> Option<GameInfo> {
+fn game_for_process(pid: u32) -> Option<AttachedLocalProcess> {
     let executable = process::executable_path(pid).ok()?;
-    let game = install::inspect_dir(executable.parent()?)?;
-    let actual_exe = executable.file_name()?.to_string_lossy();
-    actual_exe.eq_ignore_ascii_case(&game.exe).then_some(game)
+    let game = install::inspect_game_executable(&executable)?;
+    Some(AttachedLocalProcess { game, executable })
 }
 
 #[cfg(test)]
@@ -868,6 +887,11 @@ mod tests {
             exe: "Tanki.exe".into(),
             installed: false,
         }
+    }
+
+    fn attached(game: GameInfo) -> AttachedLocalProcess {
+        let executable = PathBuf::from(&game.path).join(&game.exe);
+        AttachedLocalProcess { game, executable }
     }
 
     fn log_line(text: impl Into<String>) -> LogLine {
@@ -965,7 +989,12 @@ mod tests {
             let mut state = manager.inner.lock().unwrap();
             state.active.as_mut().unwrap().process_status = ProcessStatus::Stopped;
             state.logs.push_lines(&[log_line("old attach")]);
-            assert!(state.agent_connected(Some(42), Some("test".into()), false, Some(same_game)));
+            assert!(state.agent_connected(
+                Some(42),
+                Some("test".into()),
+                false,
+                Some(attached(same_game))
+            ));
         }
         let after_attach = manager.read_log_now(Some(1), 10).unwrap();
         assert!(after_attach.entries.is_empty());
@@ -1037,8 +1066,13 @@ mod tests {
     #[test]
     fn hello_attaches_a_verified_game_to_the_empty_state() {
         let mut state = ClientState::default();
-        let attached = game("C:/Games/one");
-        state.agent_connected(Some(42), Some("test".into()), false, Some(attached));
+        let attached_game = game("C:/Games/one");
+        state.agent_connected(
+            Some(42),
+            Some("test".into()),
+            false,
+            Some(attached(attached_game)),
+        );
 
         let status = state.statuses(Vec::new()).pop().unwrap();
         assert_eq!(status.kind, ClientKind::Local);
@@ -1051,13 +1085,51 @@ mod tests {
     }
 
     #[test]
+    fn verified_hello_rebinds_launcher_pid_to_architecture_process() {
+        let mut state = ClientState::default();
+        let launched = game("C:/Games/one");
+        state.reserve_start(launched.clone()).unwrap();
+        let active = state.active.as_mut().unwrap();
+        active.pid = Some(41);
+        active.process_status = ProcessStatus::Running;
+
+        let executable = PathBuf::from(&launched.path)
+            .join("win64")
+            .join(&launched.exe);
+        state.agent_connected(
+            Some(42),
+            Some("test".into()),
+            false,
+            Some(AttachedLocalProcess {
+                game: launched,
+                executable: executable.clone(),
+            }),
+        );
+
+        let active = state.active.as_ref().unwrap();
+        assert_eq!(active.pid, Some(42));
+        assert_eq!(active.game.path, "C:/Games/one");
+        assert_eq!(active.expected_exe, executable);
+        assert_eq!(active.process_status, ProcessStatus::Running);
+        assert_eq!(active.agent_status, AgentStatus::Ready);
+
+        let statuses = state.statuses(vec![game("C:/Games/one")]);
+        assert_eq!(statuses.len(), 1);
+        assert_eq!(statuses[0].pid, Some(42));
+        assert_eq!(statuses[0].process_status, ProcessStatus::Running);
+        assert!(statuses[0].capabilities.repl);
+        assert!(statuses[0].capabilities.close);
+        assert!(statuses[0].capabilities.kill);
+    }
+
+    #[test]
     fn remote_agent_is_listed_without_local_process_controls() {
         let mut state = ClientState::default();
         state.agent_connected(
             Some(4242),
             Some("0.4.1".into()),
             true,
-            Some(game("C:/Games/coincidental-pid")),
+            Some(attached(game("C:/Games/coincidental-pid"))),
         );
 
         let statuses = state.statuses(vec![game("C:/Games/local")]);

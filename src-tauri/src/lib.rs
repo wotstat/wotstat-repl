@@ -9,12 +9,20 @@ mod transport;
 use session::AppState;
 use tauri::Manager;
 
+pub(crate) const APP_VERSION: &str = match option_env!("WOTSTAT_VERSION") {
+    Some(version) => version,
+    None => env!("CARGO_PKG_VERSION"),
+};
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .manage(AppState::default())
         .setup(|app| {
+            if let Some(window) = app.get_webview_window("main") {
+                window.set_title(&format!("WotStat REPL v{APP_VERSION}"))?;
+            }
             if cfg!(debug_assertions) {
                 app.handle().plugin(
                     tauri_plugin_log::Builder::default()

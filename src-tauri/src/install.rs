@@ -92,6 +92,32 @@ pub fn inspect_dir(dir: &Path) -> Option<GameInfo> {
     read_game(&dir, exe)
 }
 
+/// Resolve a running game executable back to its installation root.
+///
+/// Wargaming's root executable is a short-lived launcher; the long-lived game
+/// process runs from `win32/` or `win64/`. Prefer the parent installation in
+/// that layout so process tracking does not invent a second, versionless game.
+pub(crate) fn inspect_game_executable(executable: &Path) -> Option<GameInfo> {
+    let executable = normalize(executable);
+    let executable_name = executable.file_name()?.to_string_lossy();
+    let process_dir = executable.parent()?;
+    let architecture_dir = process_dir
+        .file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| {
+            name.eq_ignore_ascii_case("win32") || name.eq_ignore_ascii_case("win64")
+        });
+
+    let parent_install = architecture_dir
+        .then(|| process_dir.parent())
+        .flatten()
+        .and_then(inspect_dir)
+        .filter(|game| executable_name.eq_ignore_ascii_case(&game.exe));
+    parent_install.or_else(|| {
+        inspect_dir(process_dir).filter(|game| executable_name.eq_ignore_ascii_case(&game.exe))
+    })
+}
+
 fn game_exe(dir: &Path) -> Option<&'static str> {
     EXES.iter().copied().find(|exe| dir.join(exe).is_file())
 }
@@ -164,7 +190,7 @@ fn read_game(dir: &Path, exe: &str) -> Option<GameInfo> {
     let installed = dir
         .join("mods")
         .join(&mods_version)
-        .join(mod_name_for_exe(exe, env!("CARGO_PKG_VERSION")))
+        .join(mod_name_for_exe(exe, crate::APP_VERSION))
         .is_file();
     Some(GameInfo {
         path: dir.to_string_lossy().into_owned(),
@@ -219,7 +245,7 @@ pub fn install_agent(
     }
     let game_dir = PathBuf::from(game_dir);
     let exe = game_exe(&game_dir).ok_or_else(|| "not a supported WoT install".to_string())?;
-    let mod_name = mod_name_for_exe(exe, env!("CARGO_PKG_VERSION"));
+    let mod_name = mod_name_for_exe(exe, crate::APP_VERSION);
     let mods_dir = game_dir.join("mods").join(mods_version);
     fs::create_dir_all(&mods_dir).map_err(|e| e.to_string())?;
     // Drop any previous build of ours, including either game extension.
@@ -275,7 +301,9 @@ pub fn launch_game(game_dir: &str, exe: &str, replay: Option<&str>) -> Result<u3
 
 #[cfg(test)]
 mod tests {
-    use super::{install_agent, mod_name_for_exe, replay_extension};
+    use super::{
+        inspect_game_executable, install_agent, mod_name_for_exe, normalize, replay_extension,
+    };
 
     #[test]
     fn picks_the_game_mod_extension() {
@@ -305,12 +333,34 @@ mod tests {
 
         assert!(root
             .join("mods/1.0")
-            .join(format!("wotstat.repl_{}.mtmod", env!("CARGO_PKG_VERSION")))
+            .join(format!("wotstat.repl_{}.mtmod", crate::APP_VERSION))
             .is_file());
         assert_eq!(
             std::fs::read(root.join("mods/configs/wotstat-repl/agent-network.json")).unwrap(),
             config
         );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn running_architecture_executable_maps_to_install_root() {
+        let root = std::env::temp_dir().join(format!("wms_game_{}", uuid::Uuid::new_v4()));
+        let win64 = root.join("win64");
+        std::fs::create_dir_all(&win64).unwrap();
+        std::fs::write(root.join("WorldOfTanks.exe"), b"").unwrap();
+        std::fs::write(win64.join("WorldOfTanks.exe"), b"").unwrap();
+        std::fs::write(
+            root.join("version.xml"),
+            b"<version> v.2.3.1.3 #1 </version>",
+        )
+        .unwrap();
+
+        let game = inspect_game_executable(&win64.join("WorldOfTanks.exe")).unwrap();
+
+        assert_eq!(game.path, normalize(&root).to_string_lossy());
+        assert_eq!(game.exe, "WorldOfTanks.exe");
+        assert_eq!(game.version, "2.3.1.3");
+        assert_eq!(game.mods_version, "2.3.1.3");
         let _ = std::fs::remove_dir_all(root);
     }
 }
