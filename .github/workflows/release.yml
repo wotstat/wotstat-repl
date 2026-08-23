@@ -16,7 +16,7 @@ jobs:
     name: Build game mod
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: oven-sh/setup-bun@v2
         with:
@@ -53,14 +53,14 @@ jobs:
           Copy-Item $embedded "release-assets/wotstat.repl_$env:GITHUB_REF_NAME.mtmod"
 
       - name: Upload embedded mod
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: embedded-agent-mod
           path: src-tauri/resources/wotstat.repl.mod
           if-no-files-found: error
 
       - name: Upload game mods
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: release-mod
           path: |
@@ -86,10 +86,10 @@ jobs:
             os: macos-latest
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Download embedded mod
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: embedded-agent-mod
           path: src-tauri/resources
@@ -129,7 +129,7 @@ jobs:
           workspaces: src-tauri
           key: ${{ matrix.platform }}
 
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@v7
         with:
           python-version: '3.12'
 
@@ -206,7 +206,7 @@ jobs:
           cp "${dmgs[0]}" "release-assets/wotstat-repl_${GITHUB_REF_NAME}_macos.dmg"
 
       - name: Upload desktop release files
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: release-${{ matrix.platform }}
           path: release-assets/*
@@ -220,7 +220,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Download release files
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           pattern: release-*
           path: release-assets
