@@ -12,8 +12,12 @@ import collections
 from . import __version__, __web_enabled__
 from .capture import Capture
 from .pythonlog import PythonLogTail
-from .runner import run_on_main
-from .handlers import DISPATCH, MAIN_THREAD_OPS, seed_namespace
+from .runner import schedule_on_main
+from .handlers import (
+    DISPATCH,
+    MAIN_THREAD_OPS,
+    seed_namespace,
+)
 
 _state = {'agent': None, 'running': False}
 _LIVE_MIRROR_STREAMS = frozenset(('stdout', 'stderr', 'log'))
@@ -164,6 +168,7 @@ class _Agent(object):
             self._bus = tcp_bus
         self._interval = interval
         self._queue = collections.deque()
+        self._completed = collections.deque()
         self._capture = Capture(self._queue.append)
         self._live_mirrors = collections.deque(maxlen=_LIVE_MIRROR_CACHE)
         self._python_log = (PythonLogTail(python_log_path)
@@ -176,7 +181,7 @@ class _Agent(object):
         web_error = getattr(self._bus, 'web_error', None)
         if web_error:
             print('WotStat REPL: web UI unavailable: %s' % web_error)
-        # Seed inline, NOT via run_on_main: it only imports modules (no game-object
+        # Seed inline, NOT via schedule_on_main: it only imports modules (no game-object
         # access), and start() may itself run on the game main thread -- scheduling
         # onto that same thread and blocking on it would deadlock.
         seed_namespace()
@@ -255,20 +260,53 @@ class _Agent(object):
         handler = DISPATCH.get(op)
         if handler is None:
             return
+        if op in MAIN_THREAD_OPS:
+            try:
+                schedule_on_main(
+                    lambda: handler(req),
+                    lambda response, error: self._completed.append(
+                        (req, response, error)))
+            except BaseException:
+                import traceback
+                self._completed.append((req, None, traceback.format_exc()))
+            self._flush_completed()
+            return
         try:
-            if op in MAIN_THREAD_OPS:
-                resp = run_on_main(lambda: handler(req))
-            else:
-                resp = handler(req)
+            resp = handler(req)
         except BaseException:
             import traceback
-            resp = {'id': req.get('id'), 'type': 'result', 'ok': False,
-                    'exc': traceback.format_exc()}
+            self._finish_dispatch(req, None, traceback.format_exc())
+            return
+        self._finish_dispatch(req, resp, None)
+
+    def _finish_dispatch(self, req, resp, error):
+        if error is not None:
+            response_type = {
+                'ready': 'ready',
+                'screenshot': 'screenshot_started',
+                'mouse': 'input',
+                'keyboard': 'input',
+            }.get(req.get('type'))
+            if response_type is None:
+                resp = {'id': req.get('id'), 'type': 'result', 'ok': False,
+                        'exc': error}
+            else:
+                resp = {'id': req.get('id'), 'type': response_type,
+                        'ok': False, 'error': error}
         # Ship any stdout produced while handling this request before its
         # response, so prints precede the result in the console.
         self._flush_output()
         if resp is not None:
             self._bus.send(resp)
+
+    def _flush_completed(self):
+        pending = len(self._completed)
+        for _ in range(pending):
+            try:
+                req, response, error = self._completed.popleft()
+            except IndexError:
+                break
+            self._finish_dispatch(req, response, error)
 
     def _run(self):
         while self._running:
@@ -277,6 +315,7 @@ class _Agent(object):
                 if self._python_log is not None:
                     self._queue.extend(self._python_log.poll())
                 self._flush_output()
+                self._flush_completed()
                 for req in self._bus.poll():
                     self._dispatch(req)
             except Exception:

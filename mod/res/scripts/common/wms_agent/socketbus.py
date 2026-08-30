@@ -22,6 +22,9 @@ import uuid
 
 
 PROTOCOL_VERSION = 1
+AGENT_CAPABILITIES = (
+    'repl', 'main_thread_probe', 'virtual_input', 'screenshot',
+)
 DEFAULT_TCP_PORT = 8766
 DEFAULT_DISCOVERY_PORT = 8767
 MAX_FRAME_BYTES = 2 * 1024 * 1024
@@ -213,6 +216,7 @@ class SocketBus(object):
             'pid': self._pid,
             'acked_seq': self._acked_seq,
             'dropped_through': self._dropped_through,
+            'capabilities': list(AGENT_CAPABILITIES),
             'proof': (_proof(self._token, [
                 'hello', PROTOCOL_VERSION, self._agent_id, self._session,
                 self._hello_nonce,

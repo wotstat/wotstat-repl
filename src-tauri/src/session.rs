@@ -2,7 +2,7 @@
 
 use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
-use std::sync::mpsc::{Receiver, RecvTimeoutError};
+use std::sync::mpsc::{Receiver, RecvTimeoutError, TryRecvError};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -52,6 +52,8 @@ pub enum ClientKind {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub struct ClientCapabilities {
     pub repl: bool,
+    pub input: bool,
+    pub screenshot: bool,
     pub start: bool,
     pub close: bool,
     pub kill: bool,
@@ -94,10 +96,27 @@ pub struct LogRead {
     pub truncated: bool,
 }
 
-#[derive(Debug)]
 struct PendingRequest {
     receiver: Receiver<OutFrame>,
     generation: u64,
+    id: String,
+    transport: Arc<NetworkTransport>,
+}
+
+impl std::fmt::Debug for PendingRequest {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("PendingRequest")
+            .field("generation", &self.generation)
+            .field("id", &self.id)
+            .finish_non_exhaustive()
+    }
+}
+
+impl Drop for PendingRequest {
+    fn drop(&mut self) {
+        self.transport.cancel_request(&self.id);
+    }
 }
 
 #[derive(Clone)]
@@ -132,6 +151,7 @@ struct ActiveClient {
     process_status: ProcessStatus,
     agent_status: AgentStatus,
     agent_version: Option<String>,
+    agent_capabilities: Vec<String>,
 }
 
 #[derive(Clone)]
@@ -139,6 +159,7 @@ struct RemoteClient {
     agent_version: Option<String>,
     agent_pid: Option<i64>,
     agent_status: AgentStatus,
+    agent_capabilities: Vec<String>,
 }
 
 #[derive(Clone)]
@@ -218,8 +239,15 @@ impl ClientManager {
                         ServerEvent::Hello {
                             version,
                             pid,
+                            capabilities,
                             remote,
-                        } => state.agent_connected(*pid, version.clone(), *remote, attached),
+                        } => state.agent_connected(
+                            *pid,
+                            version.clone(),
+                            capabilities.clone(),
+                            *remote,
+                            attached,
+                        ),
                         ServerEvent::Disconnected => {
                             state.agent_disconnected();
                             false
@@ -282,9 +310,13 @@ impl ClientManager {
                 .ok_or_else(|| "not connected".to_string())?;
             (transport, state.connection_generation)
         };
+        let id = frame.id().to_string();
+        let receiver = transport.request(frame);
         Ok(PendingRequest {
-            receiver: transport.request(frame),
+            receiver,
             generation,
+            id,
+            transport,
         })
     }
 
@@ -293,11 +325,9 @@ impl ClientManager {
         frame: InFrame,
         timeout: Duration,
     ) -> Result<OutFrame, String> {
-        let PendingRequest {
-            receiver,
-            generation,
-        } = self.request(frame)?;
-        let received = tokio::task::spawn_blocking(move || receiver.recv_timeout(timeout))
+        let pending = self.request(frame)?;
+        let generation = pending.generation;
+        let received = tokio::task::spawn_blocking(move || pending.receiver.recv_timeout(timeout))
             .await
             .map_err(|error| format!("agent response wait failed: {error}"))?;
         match received {
@@ -312,6 +342,113 @@ impl ClientManager {
             Err(RecvTimeoutError::Disconnected) => {
                 Err("agent response channel disconnected".to_string())
             }
+        }
+    }
+
+    pub(crate) async fn request_while_active_process_running(
+        &self,
+        frame: InFrame,
+        timeout: Option<Duration>,
+    ) -> Result<OutFrame, String> {
+        let pending = self.request(frame)?;
+        let deadline = timeout.map(|timeout| tokio::time::Instant::now() + timeout);
+        loop {
+            match pending.receiver.try_recv() {
+                Ok(frame) => {
+                    self.record_agent_response(pending.generation);
+                    return Ok(frame);
+                }
+                Err(TryRecvError::Disconnected) => {
+                    return Err("agent response channel disconnected".to_string());
+                }
+                Err(TryRecvError::Empty) => {}
+            }
+            let status = self.active_status()?;
+            if status.process_status == ProcessStatus::Stopped {
+                return Err("game process exited while waiting for its main thread".to_string());
+            }
+            if deadline.is_some_and(|deadline| tokio::time::Instant::now() >= deadline) {
+                return Err(
+                    "game main thread did not become responsive before the requested readiness timeout"
+                        .to_string(),
+                );
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    }
+
+    pub fn require_local_client(&self) -> Result<GameInfo, String> {
+        let mut state = self
+            .inner
+            .lock()
+            .map_err(|_| "state lock poisoned".to_string())?;
+        state.refresh_process();
+        if state.remote.is_some() {
+            return Err(
+                "MCP_REQUIRES_LOCAL_CLIENT: the desktop app and game must run on the same computer"
+                    .to_string(),
+            );
+        }
+        state
+            .active
+            .as_ref()
+            .map(|active| active.game.clone())
+            .ok_or_else(|| "NO_ACTIVE_CLIENT: no local client selected".to_string())
+    }
+
+    pub fn require_local_agent_capability(&self, capability: &str) -> Result<GameInfo, String> {
+        let mut state = self
+            .inner
+            .lock()
+            .map_err(|_| "state lock poisoned".to_string())?;
+        state.refresh_process();
+        if state.remote.is_some() {
+            return Err(
+                "MCP_REQUIRES_LOCAL_CLIENT: the desktop app and game must run on the same computer"
+                    .to_string(),
+            );
+        }
+        let active = state
+            .active
+            .as_ref()
+            .ok_or_else(|| "NO_ACTIVE_CLIENT: no local client selected".to_string())?;
+        if active.agent_status != AgentStatus::Ready {
+            return Err("AGENT_NOT_READY: the game agent is not ready".to_string());
+        }
+        if active
+            .agent_capabilities
+            .iter()
+            .any(|item| item == capability)
+        {
+            Ok(active.game.clone())
+        } else {
+            Err(format!(
+                "AGENT_CAPABILITY_UNAVAILABLE: connected agent does not support {capability}; reinstall or restart it with the current wotstat-repl version"
+            ))
+        }
+    }
+
+    pub fn require_remote_agent_capability(&self, capability: &str) -> Result<(), String> {
+        let state = self
+            .inner
+            .lock()
+            .map_err(|_| "state lock poisoned".to_string())?;
+        let remote = state.remote.as_ref().ok_or_else(|| {
+            "NO_REMOTE_AGENT: no remote World of Tanks agent is connected".to_string()
+        })?;
+        if remote.agent_status != AgentStatus::Ready {
+            return Err("AGENT_NOT_READY: the remote game agent is not ready".to_string());
+        }
+        if remote
+            .agent_capabilities
+            .iter()
+            .any(|item| item == capability)
+        {
+            Ok(())
+        } else {
+            Err(format!(
+                "AGENT_CAPABILITY_UNAVAILABLE: connected remote agent does not support {capability}; reinstall or restart it with the current wotstat-repl version"
+            ))
         }
     }
 
@@ -535,7 +672,7 @@ impl ClientManager {
         Ok((pid, active.expected_exe.clone()))
     }
 
-    fn active_status(&self) -> Result<ClientStatus, String> {
+    pub fn active_status(&self) -> Result<ClientStatus, String> {
         let mut state = self
             .inner
             .lock()
@@ -581,6 +718,7 @@ impl ClientState {
             process_status: ProcessStatus::Starting,
             agent_status,
             agent_version: None,
+            agent_capabilities: Vec::new(),
         });
         Ok(StartDecision::Reserved)
     }
@@ -601,6 +739,8 @@ impl ClientState {
                 agent_pid: None,
                 capabilities: ClientCapabilities {
                     repl: false,
+                    input: false,
+                    screenshot: false,
                     start: true,
                     close: false,
                     kill: false,
@@ -642,6 +782,7 @@ impl ClientState {
         &mut self,
         reported_pid: Option<i64>,
         agent_version: Option<String>,
+        agent_capabilities: Vec<String>,
         remote_connection: bool,
         attached_process: Option<AttachedLocalProcess>,
     ) -> bool {
@@ -651,6 +792,7 @@ impl ClientState {
                 agent_version,
                 agent_pid: reported_pid,
                 agent_status: AgentStatus::Ready,
+                agent_capabilities,
             });
             return cleared;
         }
@@ -677,6 +819,7 @@ impl ClientState {
                     process_status: ProcessStatus::Running,
                     agent_status: AgentStatus::Ready,
                     agent_version,
+                    agent_capabilities,
                 });
                 self.remote = None;
                 return cleared;
@@ -693,6 +836,7 @@ impl ClientState {
                 agent_version,
                 agent_pid: reported_pid,
                 agent_status: AgentStatus::Ready,
+                agent_capabilities,
             });
             return cleared;
         }
@@ -702,6 +846,7 @@ impl ClientState {
         }
         active.agent_status = AgentStatus::Ready;
         active.agent_version = agent_version;
+        active.agent_capabilities = agent_capabilities;
         self.remote = None;
         false
     }
@@ -710,6 +855,7 @@ impl ClientState {
         self.remote = None;
         if let Some(active) = &mut self.active {
             active.agent_status = AgentStatus::Unavailable;
+            active.agent_capabilities.clear();
         }
     }
 
@@ -837,6 +983,16 @@ impl From<ActiveClient> for ClientStatus {
             agent_pid: None,
             capabilities: ClientCapabilities {
                 repl: active.agent_status == AgentStatus::Ready,
+                input: active.agent_status == AgentStatus::Ready
+                    && active
+                        .agent_capabilities
+                        .iter()
+                        .any(|capability| capability == "virtual_input"),
+                screenshot: active.agent_status == AgentStatus::Ready
+                    && active
+                        .agent_capabilities
+                        .iter()
+                        .any(|capability| capability == "screenshot"),
                 start: active.process_status == ProcessStatus::Stopped,
                 close: can_control_process,
                 kill: can_control_process,
@@ -857,6 +1013,13 @@ impl From<RemoteClient> for ClientStatus {
             agent_pid: remote.agent_pid,
             capabilities: ClientCapabilities {
                 repl: remote.agent_status == AgentStatus::Ready,
+                input: remote.agent_status == AgentStatus::Ready
+                    && remote
+                        .agent_capabilities
+                        .iter()
+                        .any(|capability| capability == "virtual_input"),
+                // MCP screenshot capture reads the game's local filesystem.
+                screenshot: false,
                 start: false,
                 close: false,
                 kill: false,
@@ -992,6 +1155,7 @@ mod tests {
             assert!(state.agent_connected(
                 Some(42),
                 Some("test".into()),
+                Vec::new(),
                 false,
                 Some(attached(same_game))
             ));
@@ -1026,7 +1190,7 @@ mod tests {
         let active = state.active.as_mut().unwrap();
         active.pid = Some(42);
         active.process_status = ProcessStatus::Running;
-        state.agent_connected(Some(42), Some("test".into()), false, None);
+        state.agent_connected(Some(42), Some("test".into()), Vec::new(), false, None);
         let active = state.active.as_ref().unwrap();
         assert_eq!(active.process_status, ProcessStatus::Running);
         assert_eq!(active.agent_status, AgentStatus::Ready);
@@ -1070,6 +1234,7 @@ mod tests {
         state.agent_connected(
             Some(42),
             Some("test".into()),
+            vec!["virtual_input".into(), "screenshot".into()],
             false,
             Some(attached(attached_game)),
         );
@@ -1080,6 +1245,8 @@ mod tests {
         assert_eq!(status.process_status, ProcessStatus::Running);
         assert_eq!(status.agent_status, AgentStatus::Ready);
         assert!(status.capabilities.repl);
+        assert!(status.capabilities.input);
+        assert!(status.capabilities.screenshot);
         assert!(status.capabilities.close);
         assert!(status.capabilities.kill);
     }
@@ -1099,6 +1266,7 @@ mod tests {
         state.agent_connected(
             Some(42),
             Some("test".into()),
+            Vec::new(),
             false,
             Some(AttachedLocalProcess {
                 game: launched,
@@ -1128,6 +1296,7 @@ mod tests {
         state.agent_connected(
             Some(4242),
             Some("0.4.1".into()),
+            vec!["virtual_input".into(), "screenshot".into()],
             true,
             Some(attached(game("C:/Games/coincidental-pid"))),
         );
@@ -1143,6 +1312,8 @@ mod tests {
         assert_eq!(remote.agent_pid, Some(4242));
         assert_eq!(remote.agent_version.as_deref(), Some("0.4.1"));
         assert!(remote.capabilities.repl);
+        assert!(remote.capabilities.input);
+        assert!(!remote.capabilities.screenshot);
         assert!(!remote.capabilities.start);
         assert!(!remote.capabilities.close);
         assert!(!remote.capabilities.kill);
@@ -1152,6 +1323,7 @@ mod tests {
         assert!(json.get("path").is_none());
         assert!(json.get("exe").is_none());
         assert_eq!(json["capabilities"]["repl"], true);
+        assert_eq!(json["capabilities"]["screenshot"], false);
         assert_eq!(json["capabilities"]["start"], false);
 
         assert!(state
@@ -1177,6 +1349,7 @@ mod tests {
             agent_version: Some("0.4.1".into()),
             agent_pid: Some(4242),
             agent_status: AgentStatus::Ready,
+            agent_capabilities: Vec::new(),
         });
 
         assert!(manager
@@ -1187,6 +1360,50 @@ mod tests {
             .kill()
             .unwrap_err()
             .starts_with("REMOTE_CLIENT_UNMANAGED:"));
+        assert!(manager
+            .require_local_client()
+            .unwrap_err()
+            .starts_with("MCP_REQUIRES_LOCAL_CLIENT:"));
+        assert!(manager
+            .require_local_agent_capability("repl")
+            .unwrap_err()
+            .starts_with("MCP_REQUIRES_LOCAL_CLIENT:"));
+    }
+
+    #[test]
+    fn remote_agent_capabilities_are_checked_without_local_process_access() {
+        let manager = ClientManager::default();
+        manager.inner.lock().unwrap().remote = Some(RemoteClient {
+            agent_version: Some("0.4.1".into()),
+            agent_pid: Some(4242),
+            agent_status: AgentStatus::Ready,
+            agent_capabilities: vec!["repl".into()],
+        });
+
+        assert_eq!(manager.require_remote_agent_capability("repl"), Ok(()));
+        assert!(manager
+            .require_remote_agent_capability("screenshot")
+            .unwrap_err()
+            .starts_with("AGENT_CAPABILITY_UNAVAILABLE:"));
+
+        manager
+            .inner
+            .lock()
+            .unwrap()
+            .remote
+            .as_mut()
+            .unwrap()
+            .agent_status = AgentStatus::Unresponsive;
+        assert!(manager
+            .require_remote_agent_capability("repl")
+            .unwrap_err()
+            .starts_with("AGENT_NOT_READY:"));
+
+        manager.inner.lock().unwrap().remote = None;
+        assert!(manager
+            .require_remote_agent_capability("repl")
+            .unwrap_err()
+            .starts_with("NO_REMOTE_AGENT:"));
     }
 
     #[test]

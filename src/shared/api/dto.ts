@@ -31,11 +31,13 @@ export interface GameInfo {
 }
 
 export type McpStatus = 'disabled' | 'starting' | 'listening' | 'error'
+export type McpMode = 'full' | 'remoteRepl'
 
 export interface McpConnectionInfo {
   enabled: boolean
   url: string
   networkUrl: string
+  mode: McpMode
   status: McpStatus
   error: string | null
 }
@@ -47,14 +49,16 @@ export interface AgentConnectionInfo {
   clientConfig: string
 }
 
-export interface McpCliState {
-  installed: boolean
+export interface McpIntegrationState {
+  available: boolean
   configured: boolean
+  configPath: string | null
+  error: string | null
 }
 
-export interface McpCliStatus {
-  codex: McpCliState
-  claude: McpCliState
+export interface McpIntegrationStatus {
+  chatgptCodex: McpIntegrationState
+  claudeCode: McpIntegrationState
 }
 
 export type ServerEvent =

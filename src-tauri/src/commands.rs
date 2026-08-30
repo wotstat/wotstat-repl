@@ -7,7 +7,7 @@ use tauri::ipc::Channel;
 use tauri::State;
 
 use crate::install::{self, GameInfo};
-use crate::mcp::{self, ConnectionInfo, McpCliStatus};
+use crate::mcp::{ConnectionInfo, McpIntegrationStatus};
 use crate::protocol::{InFrame, OutFrame, ServerEvent};
 use crate::session::{AppState, ClientStatus, CloseResult};
 use crate::transport::{AgentConnectionInfo, EventSink};
@@ -46,16 +46,19 @@ pub async fn mcp_set_enabled(
 }
 
 #[tauri::command]
-pub async fn mcp_cli_status() -> Result<McpCliStatus, String> {
-    tauri::async_runtime::spawn_blocking(mcp::cli_status)
+pub async fn mcp_integration_status(
+    state: State<'_, AppState>,
+) -> Result<McpIntegrationStatus, String> {
+    let mcp = state.mcp.clone();
+    tauri::async_runtime::spawn_blocking(move || mcp.integration_status())
         .await
-        .map_err(|error| error.to_string())
+        .map_err(|error| error.to_string())?
 }
 
 #[tauri::command]
-pub async fn mcp_add_to_codex(state: State<'_, AppState>) -> Result<String, String> {
+pub async fn mcp_add_to_chatgpt_codex(state: State<'_, AppState>) -> Result<String, String> {
     let mcp = state.mcp.clone();
-    tauri::async_runtime::spawn_blocking(move || mcp.add_to_codex())
+    tauri::async_runtime::spawn_blocking(move || mcp.add_to_chatgpt_codex())
         .await
         .map_err(|error| error.to_string())?
 }
@@ -69,9 +72,9 @@ pub async fn mcp_add_to_claude(state: State<'_, AppState>) -> Result<String, Str
 }
 
 #[tauri::command]
-pub async fn mcp_remove_from_codex(state: State<'_, AppState>) -> Result<String, String> {
+pub async fn mcp_remove_from_chatgpt_codex(state: State<'_, AppState>) -> Result<String, String> {
     let mcp = state.mcp.clone();
-    tauri::async_runtime::spawn_blocking(move || mcp.remove_from_codex())
+    tauri::async_runtime::spawn_blocking(move || mcp.remove_from_chatgpt_codex())
         .await
         .map_err(|error| error.to_string())?
 }

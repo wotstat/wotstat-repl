@@ -2,7 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import type {
   AgentConnectionInfo,
   GameInfo,
-  McpCliStatus,
+  McpIntegrationStatus,
   McpConnectionInfo,
 } from "./dto";
 
@@ -12,10 +12,10 @@ export const api = {
   mcpConnectionInfo: () => invoke<McpConnectionInfo>("mcp_connection_info"),
   mcpSetEnabled: (enabled: boolean) =>
     invoke<McpConnectionInfo>("mcp_set_enabled", { enabled }),
-  mcpCliStatus: () => invoke<McpCliStatus>("mcp_cli_status"),
-  mcpAddToCodex: () => invoke<string>("mcp_add_to_codex"),
+  mcpIntegrationStatus: () => invoke<McpIntegrationStatus>("mcp_integration_status"),
+  mcpAddToChatgptCodex: () => invoke<string>("mcp_add_to_chatgpt_codex"),
   mcpAddToClaude: () => invoke<string>("mcp_add_to_claude"),
-  mcpRemoveFromCodex: () => invoke<string>("mcp_remove_from_codex"),
+  mcpRemoveFromChatgptCodex: () => invoke<string>("mcp_remove_from_chatgpt_codex"),
   mcpRemoveFromClaude: () => invoke<string>("mcp_remove_from_claude"),
   agentConnectionInfo: () =>
     invoke<AgentConnectionInfo>("agent_connection_info"),

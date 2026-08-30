@@ -243,6 +243,8 @@ struct AgentHello {
     #[serde(default)]
     pid: Option<i64>,
     #[serde(default)]
+    capabilities: Vec<String>,
+    #[serde(default)]
     acked_seq: u64,
 }
 
@@ -455,6 +457,12 @@ impl NetworkTransport {
         rx
     }
 
+    pub(crate) fn cancel_request(&self, id: &str) {
+        if let Ok(mut pending) = self.pending.lock() {
+            pending.remove(id);
+        }
+    }
+
     fn accept_loop(self: Arc<Self>, listener: TcpListener) {
         while self.running.load(Ordering::Relaxed) {
             match listener.accept() {
@@ -556,6 +564,7 @@ impl NetworkTransport {
         (self.sink)(ServerEvent::Hello {
             version: hello.version,
             pid: hello.pid,
+            capabilities: hello.capabilities,
             remote,
         });
 
@@ -1165,6 +1174,28 @@ mod tests {
     }
 
     #[test]
+    fn cancelled_request_releases_its_correlation_waiter() {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let transport = start_transport(events);
+        let mut agent = connect_agent(&transport, "cancel-session", TOKEN);
+
+        let reply = transport.request(InFrame::Ready {
+            id: "cancel-me".to_string(),
+        });
+        let request = read_line(&mut agent);
+        assert_eq!(request["id"], "cancel-me");
+        assert!(transport.pending.lock().unwrap().contains_key("cancel-me"));
+
+        transport.cancel_request("cancel-me");
+        assert!(!transport.pending.lock().unwrap().contains_key("cancel-me"));
+        assert!(matches!(
+            reply.recv_timeout(Duration::from_millis(100)),
+            Err(RecvTimeoutError::Disconnected)
+        ));
+        transport.stop();
+    }
+
+    #[test]
     fn first_agent_remains_active_while_later_agents_are_ignored() {
         let events = Arc::new(Mutex::new(Vec::new()));
         let transport = start_transport(Arc::clone(&events));
@@ -1201,12 +1232,19 @@ mod tests {
         }
         assert!(transport.writer.lock().unwrap().is_none());
         let _next = connect_agent(&transport, "second-retry", TOKEN);
-        let takeover_hello_count = events
-            .lock()
-            .unwrap()
-            .iter()
-            .filter(|event| matches!(event, ServerEvent::Hello { .. }))
-            .count();
+        let takeover_deadline = Instant::now() + Duration::from_secs(1);
+        let takeover_hello_count = loop {
+            let count = events
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|event| matches!(event, ServerEvent::Hello { .. }))
+                .count();
+            if count >= 2 || Instant::now() >= takeover_deadline {
+                break count;
+            }
+            thread::sleep(Duration::from_millis(5));
+        };
         transport.stop();
 
         assert!(second_was_rejected, "second agent received a welcome");
@@ -1471,6 +1509,22 @@ mod tests {
             .expect("spawn real Python agent");
 
         wait_for_python_hello(&events, &mut child, &python);
+
+        assert!(events.lock().unwrap().iter().any(|event| matches!(
+            event,
+            ServerEvent::Hello { capabilities, .. }
+                if capabilities.iter().any(|capability| capability == "main_thread_probe")
+                    && capabilities.iter().any(|capability| capability == "virtual_input")
+                    && capabilities.iter().any(|capability| capability == "screenshot")
+        )));
+
+        let ready = transport
+            .request(InFrame::Ready {
+                id: "real-agent-ready".to_string(),
+            })
+            .recv_timeout(Duration::from_secs(5))
+            .unwrap();
+        assert!(matches!(ready, OutFrame::Ready { ok: true, .. }));
 
         let reply = transport
             .request(InFrame::Exec {

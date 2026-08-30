@@ -108,3 +108,28 @@ active after the first agent disconnects.
 Desktop requests keep the existing `exec`, `complete`, `inspect`, and `lint`
 shapes and are correlated by UUID `id`. The desktop sends `ping`; the agent
 answers `pong`. A silent connection is closed after 20 seconds.
+
+## Local screenshot capture
+
+MCP screenshot capture requires the Rust desktop and game to run on the same
+computer. The desktop sends a `screenshot` request containing a generated
+32-character hexadecimal `capture_id` and `jpg` or `png` format. The game calls
+`BigWorld.screenShot` with a `wotstat-repl-<capture_id>` filename prefix and
+returns only the window dimensions. The Rust desktop waits for the matching file
+under the selected installation's `screenshots` directory, verifies that it has
+finished growing, reads and validates it, then removes it. Image bytes never
+travel through this JSON protocol.
+
+## Virtual input delivery
+
+Successful `mouse` and `keyboard` responses use `ok: true` to confirm that the
+event was delivered through the game's input pipeline. The agent intentionally
+ignores the boolean returned by BigWorld's event handlers: it indicates whether
+a particular UI handler consumed the event, not whether delivery succeeded. The
+public MCP result exposes this unambiguously as `delivered: true`.
+
+A composite mouse `click` is deliberately spread across game ticks: cursor
+movement is applied first, button down runs on the next tick, and button up on
+the tick after that. The input response is emitted only after button up. This
+matches BigWorld UI processing and prevents down/up from collapsing into a
+hover-only event.

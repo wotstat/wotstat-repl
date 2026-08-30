@@ -7,6 +7,9 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum InFrame {
+    Ready {
+        id: String,
+    },
     Exec {
         id: String,
         code: String,
@@ -24,15 +27,47 @@ pub enum InFrame {
         id: String,
         code: String,
     },
+    Screenshot {
+        id: String,
+        format: String,
+        capture_id: String,
+    },
+    Mouse {
+        id: String,
+        action: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        x: Option<f64>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        y: Option<f64>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        button: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        wheel_delta: Option<i32>,
+        #[serde(skip_serializing_if = "Vec::is_empty")]
+        modifiers: Vec<String>,
+    },
+    Keyboard {
+        id: String,
+        action: String,
+        key: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        character: Option<String>,
+        #[serde(skip_serializing_if = "Vec::is_empty")]
+        modifiers: Vec<String>,
+    },
 }
 
 impl InFrame {
     pub fn id(&self) -> &str {
         match self {
-            InFrame::Exec { id, .. }
+            InFrame::Ready { id }
+            | InFrame::Exec { id, .. }
             | InFrame::Complete { id, .. }
             | InFrame::Inspect { id, .. }
-            | InFrame::Lint { id, .. } => id,
+            | InFrame::Lint { id, .. }
+            | InFrame::Screenshot { id, .. }
+            | InFrame::Mouse { id, .. }
+            | InFrame::Keyboard { id, .. } => id,
         }
     }
 }
@@ -51,6 +86,13 @@ pub enum OutFrame {
         #[serde(default)]
         source: Option<String>,
         text: String,
+    },
+    Ready {
+        id: String,
+        #[serde(default)]
+        ok: bool,
+        #[serde(default)]
+        error: Option<String>,
     },
     Result {
         id: String,
@@ -80,6 +122,34 @@ pub enum OutFrame {
         id: String,
         diagnostics: Vec<Diagnostic>,
     },
+    ScreenshotStarted {
+        id: String,
+        #[serde(default)]
+        ok: bool,
+        #[serde(default)]
+        width: Option<u32>,
+        #[serde(default)]
+        height: Option<u32>,
+        #[serde(default)]
+        error: Option<String>,
+    },
+    Input {
+        id: String,
+        #[serde(default)]
+        ok: bool,
+        #[serde(default)]
+        x: Option<f64>,
+        #[serde(default)]
+        y: Option<f64>,
+        #[serde(default)]
+        width: Option<f64>,
+        #[serde(default)]
+        height: Option<f64>,
+        #[serde(default)]
+        key: Option<String>,
+        #[serde(default)]
+        error: Option<String>,
+    },
 }
 
 impl OutFrame {
@@ -87,10 +157,13 @@ impl OutFrame {
     pub fn correlation_id(&self) -> Option<&str> {
         match self {
             OutFrame::Disconnected | OutFrame::Stdout { .. } => None,
-            OutFrame::Result { id, .. }
+            OutFrame::Ready { id, .. }
+            | OutFrame::Result { id, .. }
             | OutFrame::Complete { id, .. }
             | OutFrame::Inspect { id, .. }
-            | OutFrame::Lint { id, .. } => Some(id),
+            | OutFrame::Lint { id, .. }
+            | OutFrame::ScreenshotStarted { id, .. }
+            | OutFrame::Input { id, .. } => Some(id),
         }
     }
 }
@@ -133,6 +206,7 @@ pub enum ServerEvent {
     Hello {
         version: Option<String>,
         pid: Option<i64>,
+        capabilities: Vec<String>,
         remote: bool,
     },
     Disconnected,
@@ -184,5 +258,23 @@ mod tests {
                 && source == "Main"
                 && text == "ready\n"
         ));
+    }
+
+    #[test]
+    fn virtual_input_omits_absent_optional_fields() {
+        let frame = InFrame::Mouse {
+            id: "mouse-1".into(),
+            action: "click".into(),
+            x: None,
+            y: None,
+            button: Some("left".into()),
+            wheel_delta: None,
+            modifiers: Vec::new(),
+        };
+        let value = serde_json::to_value(frame).unwrap();
+        assert_eq!(value["type"], "mouse");
+        assert_eq!(value["button"], "left");
+        assert!(value.get("x").is_none());
+        assert!(value.get("modifiers").is_none());
     }
 }

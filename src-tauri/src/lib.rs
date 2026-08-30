@@ -3,6 +3,7 @@ mod install;
 mod mcp;
 mod process;
 mod protocol;
+mod screenshot;
 mod session;
 mod transport;
 
@@ -44,10 +45,10 @@ pub fn run() {
             commands::ping,
             commands::mcp_connection_info,
             commands::mcp_set_enabled,
-            commands::mcp_cli_status,
-            commands::mcp_add_to_codex,
+            commands::mcp_integration_status,
+            commands::mcp_add_to_chatgpt_codex,
             commands::mcp_add_to_claude,
-            commands::mcp_remove_from_codex,
+            commands::mcp_remove_from_chatgpt_codex,
             commands::mcp_remove_from_claude,
             commands::agent_connection_info,
             commands::detect_games,

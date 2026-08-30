@@ -12,6 +12,11 @@ import traceback
 from collections import OrderedDict
 
 from . import __version__
+from .automation import (
+    handle_keyboard,
+    handle_mouse,
+    handle_screenshot,
+)
 
 _DEFAULT_COMPLETION_BUDGET = 120
 _MAX_COMPLETION_BUDGET = 10000
@@ -37,6 +42,11 @@ def seed_namespace():
 
 def handle_hello(req):
     return {'type': 'hello', 'version': __version__, 'pid': os.getpid()}
+
+
+def handle_ready(req):
+    """A response proves that the game main thread executed this request."""
+    return {'id': req.get('id'), 'type': 'ready', 'ok': True, 'error': None}
 
 
 class _ExecTee(object):
@@ -466,11 +476,17 @@ def _short(text, limit=160):
 
 DISPATCH = {
     'hello': handle_hello,
+    'ready': handle_ready,
     'exec': handle_exec,
     'complete': handle_complete,
     'inspect': handle_inspect,
     'lint': handle_lint,
+    'screenshot': handle_screenshot,
+    'mouse': handle_mouse,
+    'keyboard': handle_keyboard,
 }
 
 # Ops that touch live game objects and must run on the main thread.
-MAIN_THREAD_OPS = frozenset(['exec', 'complete', 'inspect'])
+MAIN_THREAD_OPS = frozenset([
+    'ready', 'exec', 'complete', 'inspect', 'screenshot', 'mouse', 'keyboard',
+])

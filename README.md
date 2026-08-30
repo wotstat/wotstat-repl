@@ -103,7 +103,7 @@ On first launch, the application creates and enables a local Streamable HTTP MCP
 http://127.0.0.1:8765/mcp?token=<persistent-UUID>
 ```
 
-The token and server state are stored in `%LOCALAPPDATA%\WotStatWoTREPL\mcp.json`. Click **MCP** in the status bar to enable or disable the server, copy a local or network URL, or add the `wot_repl` configuration to Codex or Claude Code. The corresponding CLI must be available on `PATH` for the add buttons to work.
+The token and server state are stored in `%LOCALAPPDATA%\WotStatWoTREPL\mcp.json`. Click **MCP** in the status bar to enable or disable the server, copy a local or network URL, or register `wot_repl` with ChatGPT Desktop/Codex or Claude Code. ChatGPT Desktop and Codex share `%USERPROFILE%\.codex\config.toml` by default (or `%CODEX_HOME%\config.toml` when configured); the application updates only `[mcp_servers.wot_repl]`. Claude Code user-scoped MCP servers live in `%USERPROFILE%\.claude.json` (or `%CLAUDE_CONFIG_DIR%\.claude.json`); the application updates only `mcpServers.wot_repl`. Neither integration requires its CLI. Writes are atomic and preserve unrelated configuration. Restart the corresponding agent application after adding or removing the server.
 
 To add the server to Codex manually:
 
@@ -111,19 +111,35 @@ To add the server to Codex manually:
 codex mcp add wot_repl --url "http://127.0.0.1:8765/mcp?token=<token>"
 ```
 
-The server exposes six tools:
+The full MCP profile in the Windows app running on the game computer exposes
+nine tools:
 
 | Tool               | Purpose                                                                                                  |
 | ------------------ | -------------------------------------------------------------------------------------------------------- |
-| `wot_list_clients` | Report local installations and the currently connected remote game, including capabilities.             |
-| `wot_start_client` | Install/connect the agent and launch a local client; accepts `game_dir` and optional `replay_path`.      |
+| `wot_list_clients` | Report World of Tanks installations available on the desktop app's computer, including capabilities.    |
+| `wot_start_client` | Install/connect and launch a local client, then wait while its process is alive for the main thread; an optional safety timeout can be set explicitly. |
 | `wot_close_client` | Gracefully close the active local client; optional `timeout_ms` is limited to 0–60000.                   |
 | `wot_kill_client`  | Force-terminate the active local client after verifying its process.                                     |
 | `wot_exec`         | Run Python 2.7 code on the game's main thread; accepts `code` and optional `timeout_ms` from 1 to 30000. |
 | `wot_read_log`     | Read recent log messages; supports `cursor`, `limit`, and a short wait through `wait_ms`.                |
+| `wot_screenshot`   | Capture the game window internally and return standard MCP image content; supports JPG/PNG and progress. |
+| `wot_mouse`        | Move/click/wheel the game's virtual cursor without moving the host OS cursor or stealing focus.          |
+| `wot_keyboard`     | Send virtual key down/up/press events directly through the game's input pipeline.                        |
 
-`wot_list_clients` marks every entry as `local` or `remote` and returns explicit
-`repl`, `start`, `close`, and `kill` capabilities. A remote entry intentionally
-has no local `path` or `exe`: it supports `wot_exec` and `wot_read_log`, but the
-desktop cannot launch or terminate its process. For local clients, use
+The remote desktop profile used by macOS and other non-Windows builds is a
+separate, deliberately small MCP contract. It exposes only `wot_exec`, which
+runs Python 2.7 in the currently connected remote game agent. Client discovery,
+start/close/kill, logs, screenshots, mouse, and keyboard are not advertised by
+that MCP server and cannot be called through it. The MCP popover labels this
+mode **Remote REPL only** and points to the Windows app for the full toolset.
+
+Full MCP game control intentionally requires the Windows desktop app and World
+of Tanks to run on the same computer; the MCP client itself may connect to the
+app over the network. `wot_list_clients` therefore reports only local
+installations and their explicit `repl`, `input`, `screenshot`, `start`, `close`,
+and `kill` capabilities. The in-game agent asks BigWorld to create a uniquely
+named temporary screenshot, then the Rust desktop reads, verifies, and removes
+it through the shared local filesystem. Only the final standard MCP image
+content uses base64 as required by the protocol. The public call emits optional
+progress notifications followed by one final tool result. Use
 `wot_close_client` before resorting to forced termination.

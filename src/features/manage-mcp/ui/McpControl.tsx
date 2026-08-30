@@ -1,5 +1,10 @@
 import { useEffect, useRef, useState } from 'react'
-import { api, type McpCliStatus, type McpConnectionInfo, type McpStatus } from '@/shared/api'
+import {
+  api,
+  type McpConnectionInfo,
+  type McpIntegrationStatus,
+  type McpStatus,
+} from '@/shared/api'
 
 const DOT: Record<McpStatus, string> = {
   disabled: 'bg-faint',
@@ -66,6 +71,7 @@ function CopyButton({
 export function McpControl() {
   const root = useRef<HTMLDivElement>(null)
   const [open, setOpen] = useState(false)
+  const openRef = useRef(false)
   const [info, setInfo] = useState<McpConnectionInfo | null>(null)
   const [busy, setBusy] = useState(false)
   const [requestError, setRequestError] = useState<string | null>(null)
@@ -73,12 +79,15 @@ export function McpControl() {
   const [copyError, setCopyError] = useState<string | null>(null)
   const copyTimer = useRef<number | null>(null)
   const copyGeneration = useRef(0)
-  const [cliStatus, setCliStatus] = useState<McpCliStatus | null>(null)
-  const [cliBusy, setCliBusy] = useState<{
-    cli: 'codex' | 'claude'
+  const [integrationStatus, setIntegrationStatus] = useState<McpIntegrationStatus | null>(null)
+  const [integrationBusy, setIntegrationBusy] = useState<{
+    target: 'chatgptCodex' | 'claudeCode'
     action: 'add' | 'remove'
   } | null>(null)
-  const [cliFeedback, setCliFeedback] = useState<{ ok: boolean; text: string } | null>(null)
+  const [integrationFeedback, setIntegrationFeedback] = useState<{
+    ok: boolean
+    text: string
+  } | null>(null)
 
   const refresh = async () => {
     try {
@@ -89,19 +98,24 @@ export function McpControl() {
     }
   }
 
-  const refreshCliStatus = async () => {
+  const refreshIntegrationStatus = async () => {
     try {
-      setCliStatus(await api.mcpCliStatus())
+      setIntegrationStatus(await api.mcpIntegrationStatus())
       return true
     } catch (error) {
-      setCliFeedback({ ok: false, text: `Could not refresh CLI status: ${errorMessage(error)}` })
+      if (openRef.current) {
+        setIntegrationFeedback({
+          ok: false,
+          text: `Could not refresh MCP integration status: ${errorMessage(error)}`,
+        })
+      }
       return false
     }
   }
 
   useEffect(() => {
     void refresh()
-    void refreshCliStatus()
+    void refreshIntegrationStatus()
   }, [])
 
   useEffect(() => {
@@ -112,12 +126,14 @@ export function McpControl() {
   }, [open])
 
   useEffect(() => {
+    openRef.current = open
     if (open) return
     copyGeneration.current += 1
     if (copyTimer.current !== null) window.clearTimeout(copyTimer.current)
     copyTimer.current = null
     setCopied(null)
     setCopyError(null)
+    setIntegrationFeedback(null)
   }, [open])
 
   useEffect(
@@ -180,25 +196,29 @@ export function McpControl() {
     }
   }
 
-  const updateCli = async (cli: 'codex' | 'claude') => {
-    const state = cliStatus?.[cli]
-    if (cliBusy || !state?.installed) return
+  const updateIntegration = async (target: 'chatgptCodex' | 'claudeCode') => {
+    const state = integrationStatus?.[target]
+    if (integrationBusy || !state?.available) return
     const action = state.configured ? 'remove' : 'add'
-    setCliBusy({ cli, action })
-    setCliFeedback(null)
+    setIntegrationBusy({ target, action })
+    setIntegrationFeedback(null)
     try {
-      const text = await (cli === 'codex'
+      const text = await (target === 'chatgptCodex'
         ? action === 'add'
-          ? api.mcpAddToCodex()
-          : api.mcpRemoveFromCodex()
+          ? api.mcpAddToChatgptCodex()
+          : api.mcpRemoveFromChatgptCodex()
         : action === 'add'
           ? api.mcpAddToClaude()
           : api.mcpRemoveFromClaude())
-      if (await refreshCliStatus()) setCliFeedback({ ok: true, text })
+      if ((await refreshIntegrationStatus()) && openRef.current) {
+        setIntegrationFeedback({ ok: true, text })
+      }
     } catch (error) {
-      setCliFeedback({ ok: false, text: errorMessage(error) })
+      if (openRef.current) {
+        setIntegrationFeedback({ ok: false, text: errorMessage(error) })
+      }
     } finally {
-      setCliBusy(null)
+      setIntegrationBusy(null)
     }
   }
 
@@ -230,12 +250,28 @@ export function McpControl() {
           className="absolute bottom-7 right-0 z-40 w-96 select-none rounded border border-edge bg-elevated p-3 text-left shadow-2xl"
         >
           <div className="mb-3 flex items-center justify-between">
-            <span className="text-[12px] font-medium text-fg">MCP server</span>
+            <span className="text-[12px] font-medium text-fg">
+              {info?.mode === 'remoteRepl' ? 'MCP · Remote REPL' : 'MCP server'}
+            </span>
             <span className="inline-flex items-center gap-1.5 text-[11px] text-muted">
               <span aria-hidden="true" className={`size-1.5 rounded-full ${DOT[status]}`} />
               {LABEL[status]}
             </span>
           </div>
+
+          {info?.mode === 'remoteRepl' && (
+            <div className="mb-3 rounded border border-warn/40 bg-warn/10 p-2">
+              <p className="text-[11px] font-medium text-warn">Remote REPL only</p>
+              <p className="mt-1 select-text text-[10px] leading-4 text-muted">
+                This MCP exposes only <code className="text-fg">wot_exec</code> for Python 2.7 in
+                the connected remote game. Client discovery and process control, logs,
+                screenshots, mouse, and keyboard are unavailable.
+              </p>
+              <p className="mt-1 select-text text-[10px] leading-4 text-muted">
+                Run the Windows app on the game computer for the full MCP toolset.
+              </p>
+            </div>
+          )}
 
           <label
             className={`mb-3 flex items-center justify-between text-[11px] text-fg ${busy || !info ? 'cursor-default' : 'cursor-pointer'}`}
@@ -305,55 +341,79 @@ export function McpControl() {
                 <button
                   type="button"
                   title={
-                    cliStatus?.codex.installed === false
-                      ? 'Codex CLI not found on PATH'
-                      : cliStatus?.codex.configured
-                        ? 'Remove wot_repl from Codex'
-                        : 'Add wot_repl to Codex'
+                    integrationStatus?.chatgptCodex.error ??
+                    (integrationStatus?.chatgptCodex.configured
+                      ? 'Remove wot_repl from the shared ChatGPT Desktop/Codex config'
+                      : 'Add wot_repl to the shared ChatGPT Desktop/Codex config')
                   }
-                  disabled={cliBusy !== null || cliStatus?.codex.installed !== true}
-                  onClick={() => void updateCli('codex')}
-                  className={`h-6 rounded border px-2 text-[10px] disabled:opacity-40 ${cliStatus?.codex.configured ? 'border-error/40 text-error hover:border-error hover:bg-error/10' : 'border-edge text-muted hover:border-live hover:text-fg'}`}
+                  disabled={
+                    integrationBusy !== null || integrationStatus?.chatgptCodex.available !== true
+                  }
+                  onClick={() => void updateIntegration('chatgptCodex')}
+                  className={`h-6 rounded border px-2 text-[10px] disabled:opacity-40 ${integrationStatus?.chatgptCodex.configured ? 'border-error/40 text-error hover:border-error hover:bg-error/10' : 'border-edge text-muted hover:border-live hover:text-fg'}`}
                 >
-                  {cliBusy?.cli === 'codex'
-                    ? cliBusy.action === 'add'
+                  {integrationBusy?.target === 'chatgptCodex'
+                    ? integrationBusy.action === 'add'
                       ? 'Adding…'
                       : 'Removing…'
-                    : cliStatus?.codex.configured
-                      ? 'Remove from Codex'
-                      : 'Add to Codex'}
+                    : integrationStatus?.chatgptCodex.configured
+                      ? 'Remove from ChatGPT / Codex'
+                      : 'Add to ChatGPT / Codex'}
                 </button>
               </div>
               <div>
                 <button
                   type="button"
                   title={
-                    cliStatus?.claude.installed === false
-                      ? 'Claude CLI not found on PATH'
-                      : cliStatus?.claude.configured
-                        ? 'Remove wot_repl from Claude Code'
-                        : 'Add wot_repl to Claude Code'
+                    integrationStatus?.claudeCode.error ??
+                    (integrationStatus?.claudeCode.configured
+                      ? 'Remove wot_repl from the user-scoped Claude Code config'
+                      : 'Add wot_repl to the user-scoped Claude Code config')
                   }
-                  disabled={cliBusy !== null || cliStatus?.claude.installed !== true}
-                  onClick={() => void updateCli('claude')}
-                  className={`h-6 rounded border px-2 text-[10px] disabled:opacity-40 ${cliStatus?.claude.configured ? 'border-error/40 text-error hover:border-error hover:bg-error/10' : 'border-edge text-muted hover:border-live hover:text-fg'}`}
+                  disabled={
+                    integrationBusy !== null || integrationStatus?.claudeCode.available !== true
+                  }
+                  onClick={() => void updateIntegration('claudeCode')}
+                  className={`h-6 rounded border px-2 text-[10px] disabled:opacity-40 ${integrationStatus?.claudeCode.configured ? 'border-error/40 text-error hover:border-error hover:bg-error/10' : 'border-edge text-muted hover:border-live hover:text-fg'}`}
                 >
-                  {cliBusy?.cli === 'claude'
-                    ? cliBusy.action === 'add'
+                  {integrationBusy?.target === 'claudeCode'
+                    ? integrationBusy.action === 'add'
                       ? 'Adding…'
                       : 'Removing…'
-                    : cliStatus?.claude.configured
+                    : integrationStatus?.claudeCode.configured
                       ? 'Remove from Claude'
                       : 'Add to Claude'}
                 </button>
               </div>
             </div>
-            {cliFeedback && (
+            {integrationStatus?.chatgptCodex.configPath && (
+              <p className="mt-2 select-text break-all text-[9px] leading-4 text-faint">
+                ChatGPT / Codex config:{' '}
+                <code className="text-muted">{integrationStatus.chatgptCodex.configPath}</code>
+              </p>
+            )}
+            {integrationStatus?.chatgptCodex.error && (
+              <p role="alert" className="mt-2 select-text break-words text-[10px] text-error">
+                {integrationStatus.chatgptCodex.error}
+              </p>
+            )}
+            {integrationStatus?.claudeCode.configPath && (
+              <p className="mt-1 select-text break-all text-[9px] leading-4 text-faint">
+                Claude Code config:{' '}
+                <code className="text-muted">{integrationStatus.claudeCode.configPath}</code>
+              </p>
+            )}
+            {integrationStatus?.claudeCode.error && (
+              <p role="alert" className="mt-2 select-text break-words text-[10px] text-error">
+                {integrationStatus.claudeCode.error}
+              </p>
+            )}
+            {integrationFeedback && (
               <p
-                role={cliFeedback.ok ? 'status' : 'alert'}
-                className={`mt-2 select-text break-words text-[10px] ${cliFeedback.ok ? 'text-ok' : 'text-error'}`}
+                role={integrationFeedback.ok ? 'status' : 'alert'}
+                className={`mt-2 select-text break-words text-[10px] ${integrationFeedback.ok ? 'text-ok' : 'text-error'}`}
               >
-                {cliFeedback.text}
+                {integrationFeedback.text}
               </p>
             )}
           </div>

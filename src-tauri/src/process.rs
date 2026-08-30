@@ -21,7 +21,6 @@ const WM_CLOSE: u32 = 0x0010;
 #[link(name = "kernel32")]
 extern "system" {
     fn OpenProcess(access: u32, inherit_handle: i32, pid: u32) -> Handle;
-    fn GetExitCodeProcess(process: Handle, exit_code: *mut u32) -> i32;
     fn QueryFullProcessImageNameW(
         process: Handle,
         flags: u32,
@@ -38,23 +37,6 @@ extern "system" {
     fn EnumWindows(callback: extern "system" fn(Handle, isize) -> i32, data: isize) -> i32;
     fn GetWindowThreadProcessId(window: Handle, pid: *mut u32) -> u32;
     fn PostMessageW(window: Handle, message: u32, wparam: usize, lparam: isize) -> i32;
-}
-
-#[cfg(windows)]
-pub fn is_process_alive(pid: i64) -> bool {
-    const STILL_ACTIVE: u32 = 259;
-
-    let Ok(pid) = u32::try_from(pid) else {
-        return false;
-    };
-    let process = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) };
-    if process.is_null() {
-        return false;
-    }
-    let mut exit_code = 0;
-    let readable = unsafe { GetExitCodeProcess(process, &mut exit_code) != 0 };
-    unsafe { CloseHandle(process) };
-    readable && exit_code == STILL_ACTIVE
 }
 
 #[cfg(unix)]
