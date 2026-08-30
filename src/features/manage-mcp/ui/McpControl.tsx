@@ -7,7 +7,7 @@ import {
   type McpIntegrationStatus,
   type McpStatus,
 } from '@/shared/api'
-import { hasPrettyActivity } from '../lib/activityPresentation'
+import { getActivityNavigation, hasPrettyActivity } from '../lib/activityPresentation'
 import { McpActivityPresentation } from './McpActivityPresentation'
 
 const RECENT_ACTIVITY_MS = 2 * 60 * 1000
@@ -362,18 +362,23 @@ function PayloadBlock({ title, value }: { title: string; value: unknown | null }
 function ActivityDetail({
   entry,
   now,
+  position,
+  total,
   onBack,
+  onPrevious,
+  onNext,
 }: {
   entry: McpActivityEntry | null
   now: number
+  position: number
+  total: number
   onBack: () => void
+  onPrevious: (() => void) | null
+  onNext: (() => void) | null
 }) {
   const [view, setView] = useState<'pretty' | 'raw'>('pretty')
   const hasPretty = entry !== null && hasPrettyActivity(entry.command)
-
-  useEffect(() => {
-    setView(entry && hasPrettyActivity(entry.command) ? 'pretty' : 'raw')
-  }, [entry?.id])
+  const effectiveView = hasPretty ? view : 'raw'
 
   return (
     <div className="flex h-[min(30rem,calc(100vh-3rem))] flex-col">
@@ -398,6 +403,41 @@ function ActivityDetail({
         )}
       </div>
 
+      <div className="flex h-8 shrink-0 items-center justify-between border-b border-edge bg-panel/40 px-3">
+        <span className="text-[9px] text-faint">
+          {position > 0 ? (
+            <>
+              Event <span className="font-mono text-muted">{position}</span> of{' '}
+              <span className="font-mono text-muted">{total}</span>
+            </>
+          ) : (
+            'Event unavailable'
+          )}
+        </span>
+        <div className="flex overflow-hidden rounded border border-edge">
+          <button
+            type="button"
+            title="Previous event (older)"
+            aria-label="Previous event (older)"
+            disabled={onPrevious === null}
+            onClick={onPrevious ?? undefined}
+            className="flex size-6 items-center justify-center text-muted transition-colors hover:bg-elevated hover:text-fg focus-visible:outline focus-visible:outline-live disabled:cursor-default disabled:opacity-30"
+          >
+            <BackIcon />
+          </button>
+          <button
+            type="button"
+            title="Next event (newer)"
+            aria-label="Next event (newer)"
+            disabled={onNext === null}
+            onClick={onNext ?? undefined}
+            className="flex size-6 items-center justify-center border-l border-edge text-muted transition-colors hover:bg-elevated hover:text-fg focus-visible:outline focus-visible:outline-live disabled:cursor-default disabled:opacity-30"
+          >
+            <ChevronIcon />
+          </button>
+        </div>
+      </div>
+
       {entry ? (
         <div className="min-h-0 flex-1 select-none overflow-y-auto p-3">
           <div className="mb-3 flex flex-wrap items-center gap-x-4 gap-y-1 rounded border border-edge bg-panel px-3 py-2 text-[9px] text-muted">
@@ -411,24 +451,24 @@ function ActivityDetail({
               <div className="ml-auto flex rounded bg-elevated p-0.5" aria-label="Command view">
                 <button
                   type="button"
-                  aria-pressed={view === 'pretty'}
+                  aria-pressed={effectiveView === 'pretty'}
                   onClick={() => setView('pretty')}
-                  className={`rounded px-2 py-1 text-[8px] font-medium transition-colors ${view === 'pretty' ? 'bg-panel text-fg shadow-sm' : 'text-faint hover:text-muted'}`}
+                  className={`rounded px-2 py-1 text-[8px] font-medium transition-colors ${effectiveView === 'pretty' ? 'bg-panel text-fg shadow-sm' : 'text-faint hover:text-muted'}`}
                 >
                   Overview
                 </button>
                 <button
                   type="button"
-                  aria-pressed={view === 'raw'}
+                  aria-pressed={effectiveView === 'raw'}
                   onClick={() => setView('raw')}
-                  className={`rounded px-2 py-1 text-[8px] font-medium transition-colors ${view === 'raw' ? 'bg-panel text-fg shadow-sm' : 'text-faint hover:text-muted'}`}
+                  className={`rounded px-2 py-1 text-[8px] font-medium transition-colors ${effectiveView === 'raw' ? 'bg-panel text-fg shadow-sm' : 'text-faint hover:text-muted'}`}
                 >
                   RAW
                 </button>
               </div>
             )}
           </div>
-          {hasPretty && view === 'pretty' ? (
+          {hasPretty && effectiveView === 'pretty' ? (
             <McpActivityPresentation entry={entry} />
           ) : (
             <div className="space-y-3">
@@ -641,6 +681,7 @@ export function McpControl() {
     selectedActivityId === null
       ? null
       : (activity.find((entry) => entry.id === selectedActivityId) ?? null)
+  const activityNavigation = getActivityNavigation(activity, selectedActivityId)
 
   const openActivity = (id: number) => {
     setSelectedActivityId(id)
@@ -859,7 +900,23 @@ export function McpControl() {
               onSelect={openActivity}
             />
           ) : (
-            <ActivityDetail entry={selectedActivity} now={now} onBack={() => setPage('history')} />
+            <ActivityDetail
+              entry={selectedActivity}
+              now={now}
+              position={activityNavigation.position}
+              total={activityNavigation.total}
+              onBack={() => setPage('history')}
+              onPrevious={
+                activityNavigation.previousId === null
+                  ? null
+                  : () => setSelectedActivityId(activityNavigation.previousId)
+              }
+              onNext={
+                activityNavigation.nextId === null
+                  ? null
+                  : () => setSelectedActivityId(activityNavigation.nextId)
+              }
+            />
           )}
         </section>
       )}

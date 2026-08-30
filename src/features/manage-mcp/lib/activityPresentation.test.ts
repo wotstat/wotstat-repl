@@ -5,6 +5,7 @@ import {
   activityResponseImage,
   activityResponseText,
   activityStructuredContent,
+  getActivityNavigation,
   hasPrettyActivity,
 } from './activityPresentation'
 
@@ -78,5 +79,37 @@ describe('MCP activity presentation', () => {
       expect(hasPrettyActivity(command)).toBe(true)
     }
     expect(hasPrettyActivity('future_tool')).toBe(false)
+  })
+
+  test('navigates a newest-first activity list in chronological order', () => {
+    const entries = [{ id: 3 }, { id: 2 }, { id: 1 }]
+
+    expect(getActivityNavigation(entries, 1)).toEqual({
+      position: 1,
+      total: 3,
+      previousId: null,
+      nextId: 2,
+    })
+    expect(getActivityNavigation(entries, 2)).toEqual({
+      position: 2,
+      total: 3,
+      previousId: 1,
+      nextId: 3,
+    })
+    expect(getActivityNavigation(entries, 3)).toEqual({
+      position: 3,
+      total: 3,
+      previousId: 2,
+      nextId: null,
+    })
+  })
+
+  test('disables activity navigation when the selected event is unavailable', () => {
+    expect(getActivityNavigation([{ id: 2 }, { id: 1 }], 9)).toEqual({
+      position: 0,
+      total: 2,
+      previousId: null,
+      nextId: null,
+    })
   })
 })

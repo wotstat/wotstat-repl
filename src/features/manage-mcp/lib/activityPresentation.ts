@@ -12,6 +12,33 @@ export const PRETTY_ACTIVITY_COMMANDS = new Set([
   'wot_keyboard',
 ])
 
+export interface ActivityNavigation {
+  position: number
+  total: number
+  previousId: number | null
+  nextId: number | null
+}
+
+export function getActivityNavigation(
+  entries: readonly { id: number }[],
+  selectedId: number | null,
+): ActivityNavigation {
+  const total = entries.length
+  const selectedIndex =
+    selectedId === null ? -1 : entries.findIndex((entry) => entry.id === selectedId)
+
+  if (selectedIndex === -1) {
+    return { position: 0, total, previousId: null, nextId: null }
+  }
+
+  return {
+    position: total - selectedIndex,
+    total,
+    previousId: entries[selectedIndex + 1]?.id ?? null,
+    nextId: entries[selectedIndex - 1]?.id ?? null,
+  }
+}
+
 export function asObject(value: unknown): JsonObject | null {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
     ? (value as JsonObject)
