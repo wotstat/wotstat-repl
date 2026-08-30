@@ -44,6 +44,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::ping,
             commands::mcp_connection_info,
+            commands::mcp_activity,
             commands::mcp_set_enabled,
             commands::mcp_integration_status,
             commands::mcp_add_to_chatgpt_codex,

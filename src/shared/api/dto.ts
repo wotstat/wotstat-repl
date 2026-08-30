@@ -61,6 +61,24 @@ export interface McpIntegrationStatus {
   claudeCode: McpIntegrationState
 }
 
+export type McpActivityStatus = 'pending' | 'success' | 'error'
+
+export interface McpActivityEntry {
+  id: number
+  command: string
+  status: McpActivityStatus
+  startedAtMs: number
+  finishedAtMs: number | null
+  durationMs: number | null
+  request: unknown
+  response: unknown | null
+}
+
+export interface McpActivitySnapshot {
+  revision: number
+  entries: McpActivityEntry[] | null
+}
+
 export type ServerEvent =
   | { kind: 'log'; lines: LogLine[] }
   | { kind: 'hello'; version?: string | null; pid?: number | null; remote: boolean }

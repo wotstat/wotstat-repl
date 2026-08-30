@@ -1,11 +1,12 @@
 //! Persistent settings and lifecycle for the embedded MCP server.
 
+use std::collections::VecDeque;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, UdpSocket};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use atomic_write_file::AtomicWriteFile;
 use axum::extract::{Request, State};
@@ -16,8 +17,8 @@ use axum::Router;
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use rmcp::handler::server::{router::tool::ToolRouter, wrapper::Parameters};
 use rmcp::model::{
-    CallToolResult, ContentBlock, Implementation, ProgressNotificationParam, ServerCapabilities,
-    ServerInfo,
+    CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock, Implementation,
+    ProgressNotificationParam, ServerCapabilities, ServerInfo,
 };
 use rmcp::service::RequestContext;
 use rmcp::transport::streamable_http_server::{
@@ -41,6 +42,7 @@ use crate::session::{
 
 pub(crate) const MCP_BIND_IPV4: Ipv4Addr = Ipv4Addr::UNSPECIFIED;
 pub(crate) const MCP_PORT: u16 = 8765;
+const MCP_ACTIVITY_LIMIT: usize = 500;
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -95,6 +97,194 @@ pub enum McpStatus {
     Error,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum McpActivityStatus {
+    Pending,
+    Success,
+    Error,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct McpActivityEntry {
+    pub id: u64,
+    pub command: String,
+    pub status: McpActivityStatus,
+    pub started_at_ms: u64,
+    pub finished_at_ms: Option<u64>,
+    pub duration_ms: Option<u64>,
+    pub request: Value,
+    pub response: Option<Value>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct McpActivitySnapshot {
+    pub revision: u64,
+    pub entries: Option<Vec<McpActivityEntry>>,
+}
+
+#[derive(Clone, Default)]
+struct McpActivityLog {
+    store: Arc<Mutex<McpActivityStore>>,
+}
+
+#[derive(Default)]
+struct McpActivityStore {
+    entries: VecDeque<McpActivityEntry>,
+    next_id: u64,
+    revision: u64,
+}
+
+struct McpActivityGuard {
+    log: McpActivityLog,
+    id: u64,
+    started: Instant,
+    finished: bool,
+}
+
+impl McpActivityLog {
+    fn start(&self, command: String, request: Value) -> McpActivityGuard {
+        let mut id = 0;
+        if let Ok(mut store) = self.store.lock() {
+            store.next_id = store.next_id.wrapping_add(1);
+            id = store.next_id;
+            if store.entries.len() == MCP_ACTIVITY_LIMIT {
+                store.entries.pop_front();
+            }
+            store.entries.push_back(McpActivityEntry {
+                id,
+                command,
+                status: McpActivityStatus::Pending,
+                started_at_ms: unix_time_ms(),
+                finished_at_ms: None,
+                duration_ms: None,
+                request,
+                response: None,
+            });
+            store.revision = store.revision.wrapping_add(1);
+        }
+        McpActivityGuard {
+            log: self.clone(),
+            id,
+            started: Instant::now(),
+            finished: false,
+        }
+    }
+
+    fn snapshot(&self, since_revision: Option<u64>) -> McpActivitySnapshot {
+        let Ok(store) = self.store.lock() else {
+            return McpActivitySnapshot {
+                revision: 0,
+                entries: Some(Vec::new()),
+            };
+        };
+        McpActivitySnapshot {
+            revision: store.revision,
+            entries: (since_revision != Some(store.revision))
+                .then(|| store.entries.iter().rev().cloned().collect()),
+        }
+    }
+
+    fn finish(&self, id: u64, status: McpActivityStatus, duration: Duration, response: Value) {
+        let Ok(mut store) = self.store.lock() else {
+            return;
+        };
+        let Some(entry) = store.entries.iter_mut().find(|entry| entry.id == id) else {
+            return;
+        };
+        entry.status = status;
+        entry.finished_at_ms = Some(unix_time_ms());
+        entry.duration_ms = Some(duration.as_millis().min(u64::MAX as u128) as u64);
+        entry.response = Some(response);
+        store.revision = store.revision.wrapping_add(1);
+    }
+}
+
+impl McpActivityGuard {
+    fn complete(mut self, result: &Result<CallToolResponse, rmcp::ErrorData>) {
+        let (status, response) = activity_response(result);
+        self.log
+            .finish(self.id, status, self.started.elapsed(), response);
+        self.finished = true;
+    }
+}
+
+impl Drop for McpActivityGuard {
+    fn drop(&mut self) {
+        if self.finished {
+            return;
+        }
+        self.log.finish(
+            self.id,
+            McpActivityStatus::Error,
+            self.started.elapsed(),
+            serde_json::json!({
+                "error": {
+                    "message": "MCP command was cancelled before a response was produced"
+                }
+            }),
+        );
+    }
+}
+
+fn unix_time_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis()
+        .min(u64::MAX as u128) as u64
+}
+
+fn activity_response(
+    result: &Result<CallToolResponse, rmcp::ErrorData>,
+) -> (McpActivityStatus, Value) {
+    match result {
+        Ok(CallToolResponse::Complete(response)) => {
+            let structured_failure = response
+                .structured_content
+                .as_ref()
+                .and_then(|value| value.get("ok"))
+                .and_then(Value::as_bool)
+                == Some(false);
+            let status = if response.is_error == Some(true) || structured_failure {
+                McpActivityStatus::Error
+            } else {
+                McpActivityStatus::Success
+            };
+            (
+                status,
+                serde_json::json!({
+                    "result": serde_json::to_value(response).unwrap_or(Value::Null)
+                }),
+            )
+        }
+        Ok(CallToolResponse::InputRequired(response)) => (
+            McpActivityStatus::Success,
+            serde_json::json!({
+                "result": serde_json::to_value(response).unwrap_or(Value::Null)
+            }),
+        ),
+        Ok(CallToolResponse::Task(response)) => (
+            McpActivityStatus::Success,
+            serde_json::json!({
+                "result": serde_json::to_value(response).unwrap_or(Value::Null)
+            }),
+        ),
+        Ok(response) => (
+            McpActivityStatus::Success,
+            serde_json::json!({ "result": format!("Unsupported response: {response:?}") }),
+        ),
+        Err(error) => (
+            McpActivityStatus::Error,
+            serde_json::json!({
+                "error": serde_json::to_value(error).unwrap_or(Value::Null)
+            }),
+        ),
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct McpConfig {
     token: String,
@@ -123,6 +313,7 @@ pub struct McpRuntime {
     codex_config: Arc<CodexConfigStore>,
     claude_config: Arc<ClaudeConfigStore>,
     server: Arc<Mutex<ServerState>>,
+    activity: McpActivityLog,
     bind_address: SocketAddr,
     mode: McpMode,
 }
@@ -163,6 +354,7 @@ impl McpRuntime {
                 task: None,
                 bound_address: None,
             })),
+            activity: McpActivityLog::default(),
             bind_address,
             mode,
         }
@@ -188,6 +380,10 @@ impl McpRuntime {
             chatgpt_codex: self.codex_config.status(&url),
             claude_code: self.claude_config.status(&url),
         })
+    }
+
+    pub fn activity(&self, since_revision: Option<u64>) -> McpActivitySnapshot {
+        self.activity.snapshot(since_revision)
     }
 
     pub fn add_to_chatgpt_codex(&self) -> Result<String, String> {
@@ -266,7 +462,13 @@ impl McpRuntime {
             .disable_allowed_hosts()
             .with_json_response(true);
         let cancellation = server_config.cancellation_token.clone();
-        let router = mcp_router(config.token, client, self.mode, server_config);
+        let router = mcp_router(
+            config.token,
+            client,
+            self.activity.clone(),
+            self.mode,
+            server_config,
+        );
 
         let mut state = self
             .server
@@ -949,12 +1151,14 @@ fn advertised_ipv4() -> Ipv4Addr {
 #[derive(Clone)]
 struct WotMcpServer {
     client: ClientManager,
+    activity: McpActivityLog,
     tool_router: ToolRouter<Self>,
 }
 
 #[derive(Clone)]
 struct RemoteReplMcpServer {
     client: ClientManager,
+    activity: McpActivityLog,
     tool_router: ToolRouter<Self>,
 }
 
@@ -1138,9 +1342,10 @@ struct InputOutput {
 }
 
 impl WotMcpServer {
-    fn new(client: ClientManager) -> Self {
+    fn new(client: ClientManager, activity: McpActivityLog) -> Self {
         Self {
             client,
+            activity,
             tool_router: Self::tool_router(),
         }
     }
@@ -1245,9 +1450,10 @@ impl WotMcpServer {
 }
 
 impl RemoteReplMcpServer {
-    fn new(client: ClientManager) -> Self {
+    fn new(client: ClientManager, activity: McpActivityLog) -> Self {
         Self {
             client,
+            activity,
             tool_router: Self::tool_router(),
         }
     }
@@ -1785,6 +1991,24 @@ fn input_tool_result(frame: Result<OutFrame, String>, input_kind: &str) -> CallT
 
 #[rmcp::tool_handler(router = self.tool_router)]
 impl ServerHandler for WotMcpServer {
+    async fn call_tool(
+        &self,
+        request: CallToolRequestParams,
+        context: RequestContext<RoleServer>,
+    ) -> Result<CallToolResponse, rmcp::ErrorData> {
+        let command = request.name.to_string();
+        let request_value = serde_json::json!({
+            "method": "tools/call",
+            "params": serde_json::to_value(&request).unwrap_or(Value::Null),
+        });
+        let activity = self.activity.start(command, request_value);
+        let tool_context =
+            rmcp::handler::server::tool::ToolCallContext::new(self, request, context);
+        let result = self.tool_router.call(tool_context).await;
+        activity.complete(&result);
+        result
+    }
+
     fn get_info(&self) -> ServerInfo {
         ServerInfo::new(ServerCapabilities::builder().enable_tools().build()).with_server_info(
             Implementation::new("wotstat-repl", crate::APP_VERSION)
@@ -1801,6 +2025,24 @@ impl ServerHandler for WotMcpServer {
 
 #[rmcp::tool_handler(router = self.tool_router)]
 impl ServerHandler for RemoteReplMcpServer {
+    async fn call_tool(
+        &self,
+        request: CallToolRequestParams,
+        context: RequestContext<RoleServer>,
+    ) -> Result<CallToolResponse, rmcp::ErrorData> {
+        let command = request.name.to_string();
+        let request_value = serde_json::json!({
+            "method": "tools/call",
+            "params": serde_json::to_value(&request).unwrap_or(Value::Null),
+        });
+        let activity = self.activity.start(command, request_value);
+        let tool_context =
+            rmcp::handler::server::tool::ToolCallContext::new(self, request, context);
+        let result = self.tool_router.call(tool_context).await;
+        activity.complete(&result);
+        result
+    }
+
     fn get_info(&self) -> ServerInfo {
         ServerInfo::new(ServerCapabilities::builder().enable_tools().build()).with_server_info(
             Implementation::new("wotstat-repl", crate::APP_VERSION)
@@ -1818,6 +2060,7 @@ impl ServerHandler for RemoteReplMcpServer {
 fn mcp_router(
     token: String,
     client: ClientManager,
+    activity: McpActivityLog,
     mode: McpMode,
     config: StreamableHttpServerConfig,
 ) -> Router {
@@ -1825,7 +2068,7 @@ fn mcp_router(
         McpMode::Full => {
             let service: StreamableHttpService<WotMcpServer, LocalSessionManager> =
                 StreamableHttpService::new(
-                    move || Ok(WotMcpServer::new(client.clone())),
+                    move || Ok(WotMcpServer::new(client.clone(), activity.clone())),
                     Default::default(),
                     config,
                 );
@@ -1834,7 +2077,7 @@ fn mcp_router(
         McpMode::RemoteRepl => {
             let service: StreamableHttpService<RemoteReplMcpServer, LocalSessionManager> =
                 StreamableHttpService::new(
-                    move || Ok(RemoteReplMcpServer::new(client.clone())),
+                    move || Ok(RemoteReplMcpServer::new(client.clone(), activity.clone())),
                     Default::default(),
                     config,
                 );
@@ -2206,6 +2449,63 @@ url = "http://other.example/mcp"
     }
 
     #[test]
+    fn activity_log_tracks_lifecycle_and_keeps_the_newest_500_commands() {
+        let activity = McpActivityLog::default();
+        let pending = activity.start("pending-command".into(), serde_json::json!({ "value": 1 }));
+        let pending_snapshot = activity.snapshot(None);
+        assert_eq!(pending_snapshot.entries.as_ref().unwrap().len(), 1);
+        assert_eq!(
+            pending_snapshot.entries.as_ref().unwrap()[0].status,
+            McpActivityStatus::Pending
+        );
+
+        let failed: Result<CallToolResponse, rmcp::ErrorData> =
+            Ok(CallToolResult::error(vec![ContentBlock::text("failed")]).into());
+        pending.complete(&failed);
+        let failed_snapshot = activity.snapshot(None);
+        assert_eq!(
+            failed_snapshot.entries.as_ref().unwrap()[0].status,
+            McpActivityStatus::Error
+        );
+        assert!(failed_snapshot.entries.as_ref().unwrap()[0]
+            .response
+            .is_some());
+
+        let structured_failure: Result<CallToolResponse, rmcp::ErrorData> =
+            Ok(CallToolResult::structured(serde_json::json!({ "ok": false })).into());
+        activity
+            .start("failed-exec".into(), serde_json::json!({}))
+            .complete(&structured_failure);
+        assert_eq!(
+            activity.snapshot(None).entries.as_ref().unwrap()[0].status,
+            McpActivityStatus::Error,
+            "a command that completed with structured ok=false should be shown as failed"
+        );
+
+        let succeeded: Result<CallToolResponse, rmcp::ErrorData> =
+            Ok(CallToolResult::success(Vec::new()).into());
+        for index in 0..MCP_ACTIVITY_LIMIT + 2 {
+            activity
+                .start(
+                    format!("command-{index}"),
+                    serde_json::json!({ "index": index }),
+                )
+                .complete(&succeeded);
+        }
+
+        let snapshot = activity.snapshot(None);
+        let entries = snapshot.entries.as_ref().unwrap();
+        assert_eq!(entries.len(), MCP_ACTIVITY_LIMIT);
+        assert_eq!(entries.first().unwrap().command, "command-501");
+        assert_eq!(entries.last().unwrap().command, "command-2");
+        assert_eq!(entries.first().unwrap().status, McpActivityStatus::Success);
+        assert!(
+            activity.snapshot(Some(snapshot.revision)).entries.is_none(),
+            "an unchanged activity snapshot should not resend every payload"
+        );
+    }
+
+    #[test]
     fn successful_virtual_input_reports_delivery_not_handler_consumption() {
         let frame = serde_json::from_value(serde_json::json!({
             "type": "input",
@@ -2434,6 +2734,18 @@ url = "http://other.example/mcp"
             .as_str()
             .unwrap()
             .contains("NO_ACTIVE_CLIENT"));
+
+        let activity = runtime.activity(None);
+        let entries = activity.entries.as_ref().unwrap();
+        assert_eq!(entries.len(), 4);
+        assert_eq!(entries[0].command, "wot_read_log");
+        assert_eq!(entries[0].status, McpActivityStatus::Error);
+        assert_eq!(entries[1].command, "wot_list_clients");
+        assert_eq!(entries[1].status, McpActivityStatus::Success);
+        assert_eq!(entries[3].command, "wot_close_client");
+        assert_eq!(entries[3].request["params"]["arguments"]["timeout_ms"], -1);
+        assert!(entries.iter().all(|entry| entry.duration_ms.is_some()));
+        assert!(entries.iter().all(|entry| entry.response.is_some()));
 
         let repeated = runtime.start(client).await.unwrap();
         assert_eq!(repeated.status, McpStatus::Listening);

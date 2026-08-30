@@ -7,7 +7,7 @@ use tauri::ipc::Channel;
 use tauri::State;
 
 use crate::install::{self, GameInfo};
-use crate::mcp::{ConnectionInfo, McpIntegrationStatus};
+use crate::mcp::{ConnectionInfo, McpActivitySnapshot, McpIntegrationStatus};
 use crate::protocol::{InFrame, OutFrame, ServerEvent};
 use crate::session::{AppState, ClientStatus, CloseResult};
 use crate::transport::{AgentConnectionInfo, EventSink};
@@ -33,6 +33,14 @@ pub fn ping() -> &'static str {
 #[tauri::command]
 pub fn mcp_connection_info(state: State<'_, AppState>) -> Result<ConnectionInfo, String> {
     state.mcp.connection_info()
+}
+
+#[tauri::command]
+pub fn mcp_activity(
+    state: State<'_, AppState>,
+    since_revision: Option<u64>,
+) -> McpActivitySnapshot {
+    state.mcp.activity(since_revision)
 }
 
 #[tauri::command]
