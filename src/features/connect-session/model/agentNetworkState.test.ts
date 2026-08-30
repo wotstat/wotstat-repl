@@ -19,6 +19,6 @@ describe("Agent LAN presentation", () => {
   test("is green while LAN and security are enabled", () => {
     expect(
       agentLanPresentation(true, true).indicatorClass,
-    ).toBe("bg-live");
+    ).toBe("bg-ok");
   });
 });
