@@ -466,6 +466,7 @@ impl ClientManager {
 
     pub fn list(&self) -> Result<Vec<ClientStatus>, String> {
         let games = install::detect_games();
+        self.observe_running_games(&games)?;
         let mut state = self
             .inner
             .lock()
@@ -516,10 +517,14 @@ impl ClientManager {
     ) -> Result<ClientStatus, String> {
         let game = install::inspect_dir(Path::new(game_dir))
             .ok_or_else(|| "not a supported WoT install".to_string())?;
-        match self.reserve_start(game.clone())? {
-            StartDecision::Already(status) => return Ok(status),
-            StartDecision::Reserved => {}
-        }
+        self.observe_running_games(std::slice::from_ref(&game))?;
+        let already_running = match self.reserve_start(game.clone())? {
+            StartDecision::Already(status) if status.agent_status == AgentStatus::Ready => {
+                return Ok(status)
+            }
+            StartDecision::Already(_) => true,
+            StartDecision::Reserved => false,
+        };
 
         if let Err(error) = self.install_agent(&game.path, &game.mods_version) {
             self.fail_start(&game);
@@ -532,9 +537,20 @@ impl ClientManager {
                 }
             }
         }
-        if let Err(error) = self.connect(false, true, sink) {
-            self.fail_start(&game);
-            return Err(error);
+        let needs_transport = self
+            .inner
+            .lock()
+            .map_err(|_| "state lock poisoned".to_string())?
+            .transport
+            .is_none();
+        if needs_transport {
+            if let Err(error) = self.connect(false, true, sink) {
+                self.fail_start(&game);
+                return Err(error);
+            }
+        }
+        if already_running {
+            return self.active_status();
         }
         if let Err(error) = self.spawn_reserved(&game, replay) {
             let _ = self.disconnect();
@@ -555,6 +571,7 @@ impl ClientManager {
         if !game.exe.eq_ignore_ascii_case(exe) {
             return Err(format!("unexpected client executable: {exe}"));
         }
+        self.observe_running_games(std::slice::from_ref(&game))?;
         match self.reserve_start(game.clone())? {
             StartDecision::Already(status) => Ok(status),
             StartDecision::Reserved => {
@@ -615,6 +632,40 @@ impl ClientManager {
             self.log_notify.notify_waiters();
         }
         Ok(decision)
+    }
+
+    fn observe_running_games(&self, games: &[GameInfo]) -> Result<(), String> {
+        {
+            let mut state = self
+                .inner
+                .lock()
+                .map_err(|_| "state lock poisoned".to_string())?;
+            state.refresh_process();
+            if state.remote.is_some()
+                || state
+                    .active
+                    .as_ref()
+                    .is_some_and(|active| active.process_status != ProcessStatus::Stopped)
+            {
+                return Ok(());
+            }
+        }
+
+        let Some((pid, attached)) = running_game_process(games) else {
+            return Ok(());
+        };
+        let cleared = {
+            let mut state = self
+                .inner
+                .lock()
+                .map_err(|_| "state lock poisoned".to_string())?;
+            state.refresh_process();
+            state.observe_running_process(pid, attached)
+        };
+        if cleared {
+            self.log_notify.notify_waiters();
+        }
+        Ok(())
     }
 
     fn spawn_reserved(&self, game: &GameInfo, replay: Option<&str>) -> Result<(), String> {
@@ -776,6 +827,32 @@ impl ClientState {
             active.process_status = ProcessStatus::Stopped;
             active.agent_status = AgentStatus::Unavailable;
         }
+    }
+
+    fn observe_running_process(&mut self, pid: u32, attached: AttachedLocalProcess) -> bool {
+        if self.remote.is_some()
+            || self
+                .active
+                .as_ref()
+                .is_some_and(|active| active.process_status != ProcessStatus::Stopped)
+        {
+            return false;
+        }
+        let cleared = self.logs.clear();
+        self.active = Some(ActiveClient {
+            game: attached.game,
+            expected_exe: attached.executable,
+            pid: Some(pid),
+            process_status: ProcessStatus::Running,
+            agent_status: if self.transport.is_some() {
+                AgentStatus::Connecting
+            } else {
+                AgentStatus::Unavailable
+            },
+            agent_version: None,
+            agent_capabilities: Vec::new(),
+        });
+        cleared
     }
 
     fn agent_connected(
@@ -1038,6 +1115,35 @@ fn game_for_process(pid: u32) -> Option<AttachedLocalProcess> {
     Some(AttachedLocalProcess { game, executable })
 }
 
+fn running_game_process(games: &[GameInfo]) -> Option<(u32, AttachedLocalProcess)> {
+    let processes: Vec<_> = process::running_processes()
+        .into_iter()
+        .filter_map(|(pid, executable)| {
+            let game = install::inspect_game_executable(&executable)?;
+            let architecture_process = executable
+                .parent()
+                .and_then(Path::file_name)
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| {
+                    name.eq_ignore_ascii_case("win32") || name.eq_ignore_ascii_case("win64")
+                });
+            Some((
+                pid,
+                AttachedLocalProcess { game, executable },
+                architecture_process,
+            ))
+        })
+        .collect();
+
+    games.iter().find_map(|game| {
+        processes
+            .iter()
+            .filter(|(_, attached, _)| same_game(game, &attached.game))
+            .max_by_key(|(_, _, architecture_process)| *architecture_process)
+            .map(|(pid, attached, _)| (*pid, attached.clone()))
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1055,6 +1161,64 @@ mod tests {
     fn attached(game: GameInfo) -> AttachedLocalProcess {
         let executable = PathBuf::from(&game.path).join(&game.exe);
         AttachedLocalProcess { game, executable }
+    }
+
+    fn ephemeral_agent_config(root: &Path) -> PathBuf {
+        std::fs::create_dir_all(root).unwrap();
+        let probe = std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let tcp_port = probe.local_addr().unwrap().port();
+        drop(probe);
+        let config_path = root.join("agent-network.json");
+        std::fs::write(
+            &config_path,
+            serde_json::to_vec_pretty(&crate::transport::AgentNetworkConfig {
+                token: "00000000-0000-4000-8000-000000000001".into(),
+                host: "auto".into(),
+                tcp_port,
+                discovery_port: tcp_port.saturating_add(1),
+            })
+            .unwrap(),
+        )
+        .unwrap();
+        config_path
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn start_connects_transport_for_an_already_running_manual_client() {
+        let root = std::env::temp_dir().join(format!("wms_manual_start_{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("Tanki.exe"), b"").unwrap();
+        std::fs::write(
+            root.join("version.xml"),
+            b"<version> v.1.44.0.0 #1 </version>",
+        )
+        .unwrap();
+
+        let config_path = ephemeral_agent_config(&root);
+        let manager = ClientManager::with_config_path(config_path);
+        let running_game = install::inspect_dir(&root).unwrap();
+        manager.inner.lock().unwrap().active = Some(ActiveClient {
+            expected_exe: root.join("Tanki.exe"),
+            game: running_game.clone(),
+            pid: Some(std::process::id()),
+            process_status: ProcessStatus::Running,
+            agent_status: AgentStatus::Unavailable,
+            agent_version: Some("1.3.1".into()),
+            agent_capabilities: Vec::new(),
+        });
+
+        manager
+            .start(running_game.path.as_str(), None, Arc::new(|_| {}))
+            .unwrap();
+        let connected = manager.inner.lock().unwrap().transport.is_some();
+
+        manager.disconnect().unwrap();
+        let _ = std::fs::remove_dir_all(root);
+        assert!(
+            connected,
+            "an already-running manual client still needs the agent transport"
+        );
     }
 
     fn log_line(text: impl Into<String>) -> LogLine {
@@ -1252,6 +1416,24 @@ mod tests {
     }
 
     #[test]
+    fn a_manually_started_process_is_listed_as_running_before_its_agent_connects() {
+        let mut state = ClientState::default();
+        let running_game = game("C:/Games/manual");
+
+        state.observe_running_process(42, attached(running_game.clone()));
+
+        let status = state.statuses(vec![running_game]).pop().unwrap();
+        assert_eq!(status.kind, ClientKind::Local);
+        assert_eq!(status.pid, Some(42));
+        assert_eq!(status.process_status, ProcessStatus::Running);
+        assert_eq!(status.agent_status, AgentStatus::Unavailable);
+        assert!(!status.capabilities.repl);
+        assert!(!status.capabilities.start);
+        assert!(status.capabilities.close);
+        assert!(status.capabilities.kill);
+    }
+
+    #[test]
     fn verified_hello_rebinds_launcher_pid_to_architecture_process() {
         let mut state = ClientState::default();
         let launched = game("C:/Games/one");
@@ -1409,7 +1591,7 @@ mod tests {
     #[test]
     fn disconnect_clears_the_transport() {
         let dir = std::env::temp_dir().join(format!("wms_client_manager_{}", uuid::Uuid::new_v4()));
-        let manager = ClientManager::with_config_path(dir.join("agent-network.json"));
+        let manager = ClientManager::with_config_path(ephemeral_agent_config(&dir));
 
         manager.connect(false, true, Arc::new(|_| {})).unwrap();
         manager.disconnect().unwrap();

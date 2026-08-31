@@ -472,7 +472,9 @@ impl NetworkTransport {
                     }
                     let transport = Arc::clone(&self);
                     thread::spawn(move || {
-                        transport.connection_loop(stream, !peer.ip().is_loopback())
+                        let local_addresses = local_ipv4_addresses();
+                        transport
+                            .connection_loop(stream, peer_is_remote(peer.ip(), &local_addresses))
                     });
                 }
                 Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
@@ -831,6 +833,13 @@ impl NetworkTransport {
     }
 }
 
+fn peer_is_remote(peer: std::net::IpAddr, local_addresses: &[Ipv4Addr]) -> bool {
+    match peer {
+        std::net::IpAddr::V4(peer) => !peer.is_loopback() && !local_addresses.contains(&peer),
+        std::net::IpAddr::V6(peer) => !peer.is_loopback(),
+    }
+}
+
 fn bind_tcp_listener(address: SocketAddr) -> io::Result<TcpListener> {
     #[cfg(unix)]
     {
@@ -957,6 +966,24 @@ mod tests {
             addresses,
             ["192.168.0.30:8766", "10.37.129.2:8766", "198.18.0.1:8766",]
         );
+    }
+
+    #[test]
+    fn a_peer_using_this_computers_lan_address_is_local() {
+        let local_address = Ipv4Addr::new(192, 168, 0, 30);
+
+        assert!(!peer_is_remote(
+            std::net::IpAddr::V4(local_address),
+            &[Ipv4Addr::LOCALHOST, local_address],
+        ));
+    }
+
+    #[test]
+    fn a_peer_using_another_computers_lan_address_is_remote() {
+        assert!(peer_is_remote(
+            std::net::IpAddr::V4(Ipv4Addr::new(192, 168, 0, 31)),
+            &[Ipv4Addr::LOCALHOST, Ipv4Addr::new(192, 168, 0, 30)],
+        ));
     }
 
     fn start_transport(events: Arc<Mutex<Vec<ServerEvent>>>) -> Arc<NetworkTransport> {

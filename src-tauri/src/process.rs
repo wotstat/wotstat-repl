@@ -32,6 +32,12 @@ extern "system" {
 }
 
 #[cfg(windows)]
+#[link(name = "psapi")]
+extern "system" {
+    fn EnumProcesses(process_ids: *mut u32, buffer_bytes: u32, bytes_written: *mut u32) -> i32;
+}
+
+#[cfg(windows)]
 #[link(name = "user32")]
 extern "system" {
     fn EnumWindows(callback: extern "system" fn(Handle, isize) -> i32, data: isize) -> i32;
@@ -84,6 +90,37 @@ pub fn executable_path(pid: u32) -> Result<std::path::PathBuf, String> {
 #[cfg(not(windows))]
 pub fn executable_path(_pid: u32) -> Result<std::path::PathBuf, String> {
     Err("client process inspection is only supported on Windows".to_string())
+}
+
+#[cfg(windows)]
+pub fn running_processes() -> Vec<(u32, std::path::PathBuf)> {
+    let mut capacity = 1024_usize;
+    let process_ids = loop {
+        let mut process_ids = vec![0_u32; capacity];
+        let mut bytes_written = 0_u32;
+        let buffer_bytes = (process_ids.len() * std::mem::size_of::<u32>()) as u32;
+        if unsafe { EnumProcesses(process_ids.as_mut_ptr(), buffer_bytes, &mut bytes_written) } == 0
+        {
+            return Vec::new();
+        }
+        let count = bytes_written as usize / std::mem::size_of::<u32>();
+        if count < process_ids.len() || capacity >= 65_536 {
+            process_ids.truncate(count);
+            break process_ids;
+        }
+        capacity *= 2;
+    };
+
+    process_ids
+        .into_iter()
+        .filter(|pid| *pid != 0)
+        .filter_map(|pid| executable_path(pid).ok().map(|path| (pid, path)))
+        .collect()
+}
+
+#[cfg(not(windows))]
+pub fn running_processes() -> Vec<(u32, std::path::PathBuf)> {
+    Vec::new()
 }
 
 #[cfg(windows)]
